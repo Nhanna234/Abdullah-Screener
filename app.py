@@ -30,7 +30,7 @@ import streamlit as st
 import data as D
 import engine as E
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.3.0"
 CACHE_DIR = os.environ.get("EMA_APP_CACHE", os.path.join(tempfile.gettempdir(), "ema_reclaim_prices"))
 
 # palette (validated categorical slots: strategy, Nifty 50, Nifty 500) + neutral for EW universe
@@ -208,64 +208,128 @@ ROWFMT = {"Total return": "{:+.1%}", "CAGR": "{:+.1%}", "Volatility (ann.)": "{:
           "Avg months held": "{:.1f}", "Top-10 trades share of profit": "{:.0%}"}
 
 
+# ═══════════════════════════════════════════════════════════════ saved settings
+# Sidebar defaults. "Save as default" writes the current values into the page URL
+# (query parameters); bookmarking that URL restores them on the next visit.
+SETTINGS = {
+    "index": "Nifty Total Market", "setups": "B",
+    "min_dist": 30.0, "slope_w": 6, "band": 3.0,
+    "a_cr": 0.80, "a_ret": 5.0, "a_flat": True,
+    "b_kmax": 4, "b_cr": 0.60, "b_ret": 5.0, "b_lo": 10.0, "b_hi": 5.0,
+    "b_dry": True, "b_dry_ratio": 0.80, "b_exp": False,
+    "ema_span": 12, "min_hist": 24, "min_turn": 1.0, "use_ext": True, "exit_ext": 1.70,
+    "slots": 10, "capital": 1_000_000, "cost": 0.40, "cash_yield": 6.0,
+    "execution": "next_open", "bench": "TRI",
+}
+CHOICES = {"index": list(D.INDEX_FILES), "setups": ["A+B", "A", "B"],
+           "execution": ["next_open", "close"], "bench": ["TRI", "PRICE"]}
+
+
+def load_saved() -> tuple[dict, bool]:
+    """Defaults, overridden by any valid values saved in the page URL."""
+    out, found = dict(SETTINGS), False
+    qp = st.query_params
+    for k, d in SETTINGS.items():
+        if k not in qp:
+            continue
+        v = qp[k]
+        try:
+            if isinstance(d, bool):
+                val = v in ("1", "true", "True")
+            elif isinstance(d, int):
+                val = int(float(v))
+            elif isinstance(d, float):
+                val = float(v)
+            else:
+                val = v
+                if k in CHOICES and v not in CHOICES[k]:
+                    continue
+            out[k], found = val, True
+        except ValueError:
+            continue
+    return out, found
+
+
+def clamp(v, lo, hi):
+    return min(max(v, lo), hi)
+
+
+S, from_url = load_saved()
+
 # ═══════════════════════════════════════════════════════════════════ sidebar
 with st.sidebar:
+    if from_url:
+        st.caption("Using settings saved in this page link.")
     st.header("Universe")
-    index_name = st.selectbox("Index", list(D.INDEX_FILES), index=list(D.INDEX_FILES).index("Nifty 500"))
+    index_name = st.selectbox("Index", CHOICES["index"], index=CHOICES["index"].index(S["index"]), key="index")
     up_const = st.file_uploader("Override constituent list (NSE CSV with a 'Symbol' column)", type="csv")
 
     st.header("Buy setups")
-    setups = st.radio("Use", ["A+B", "A", "B"], horizontal=True,
-                      format_func=lambda x: {"A+B": "A + B", "A": "A only", "B": "B only"}[x],
+    setups = st.radio("Use", CHOICES["setups"], index=CHOICES["setups"].index(S["setups"]), horizontal=True,
+                      format_func=lambda x: {"A+B": "A + B", "A": "A only", "B": "B only"}[x], key="setups",
                       help="A = reclaim of the EMA from below · B = pullback reversal in an uptrend. "
                            "Ranking: B first, then A-Rising, then A-Flat.")
-    min_dist = st.number_input("Min distance above 12-month low (%)", 0.0, 500.0, 0.0, 5.0,
+    min_dist = st.number_input("Min distance above 12-month low (%)", 0.0, 500.0, clamp(S["min_dist"], 0.0, 500.0),
+                               5.0, key="min_dist",
                                help="Close / lowest monthly low of the last 12 months − 1. "
                                     "0 = no filter. Applies to both setups; also the ranking metric.") / 100
     c1, c2 = st.columns(2)
-    slope_w = c1.number_input("EMA slope window (m)", 2, 12, 6)
-    band = c2.number_input("Flat band ± (%)", 0.0, 20.0, 3.0, 0.5) / 100
+    slope_w = c1.number_input("EMA slope window (m)", 2, 12, clamp(S["slope_w"], 2, 12), key="slope_w")
+    band = c2.number_input("Flat band ± (%)", 0.0, 20.0, clamp(S["band"], 0.0, 20.0), 0.5, key="band") / 100
 
     st.subheader("A · Reclaim")
-    min_cr = st.slider("A: min closing range", 0.0, 1.0, 0.80, 0.05,
+    min_cr = st.slider("A: min closing range", 0.0, 1.0, clamp(S["a_cr"], 0.0, 1.0), 0.05, key="a_cr",
                        help="(Close − Low) / (High − Low) of the monthly candle.")
-    min_ret = st.number_input("A: min signal-month return (%)", 0.0, 100.0, 8.0, 1.0) / 100
-    allow_flat = st.toggle("A: allow Flat-EMA stocks (ranked after Rising)", True,
+    min_ret = st.number_input("A: min signal-month return (%)", 0.0, 100.0, clamp(S["a_ret"], 0.0, 100.0), 1.0,
+                              key="a_ret") / 100
+    allow_flat = st.toggle("A: allow Flat-EMA stocks (ranked after Rising)", S["a_flat"], key="a_flat",
                            help="Off = only stocks whose EMA rose more than the flat band.")
 
     st.subheader("B · Pullback reversal")
-    b_kmax = st.slider("B: pullback candles after the 12-month high (max)", 1, E.B_KMAX_LIMIT, 4,
+    b_kmax = st.slider("B: pullback candles after the 12-month high (max)", 1, E.B_KMAX_LIMIT,
+                       clamp(S["b_kmax"], 1, E.B_KMAX_LIMIT), key="b_kmax",
                        help="The 12-month closing high must be 2 to (max+1) months before the signal month, "
                             "and every close since then at or above the EMA. EMA must be Rising.")
-    b_min_cr = st.slider("B: min closing range", 0.0, 1.0, 0.75, 0.05)
-    b_min_ret = st.number_input("B: min signal-month return (%)", 0.0, 100.0, 8.0, 1.0) / 100
+    b_min_cr = st.slider("B: min closing range", 0.0, 1.0, clamp(S["b_cr"], 0.0, 1.0), 0.05, key="b_cr")
+    b_min_ret = st.number_input("B: min signal-month return (%)", 0.0, 100.0, clamp(S["b_ret"], 0.0, 100.0), 1.0,
+                                key="b_ret") / 100
     c1, c2 = st.columns(2)
-    b_low_lo = c1.number_input("B: low ≥ EMA − (%)", 0.0, 50.0, 15.0, 1.0) / 100
-    b_low_hi = c2.number_input("B: low ≤ EMA + (%)", 0.0, 50.0, 5.0, 1.0) / 100
-    b_use_dry = st.toggle("B: pullback on low volume", True,
+    b_low_lo = c1.number_input("B: low ≥ EMA − (%)", 0.0, 50.0, clamp(S["b_lo"], 0.0, 50.0), 1.0, key="b_lo") / 100
+    b_low_hi = c2.number_input("B: low ≤ EMA + (%)", 0.0, 50.0, clamp(S["b_hi"], 0.0, 50.0), 1.0, key="b_hi") / 100
+    b_use_dry = st.toggle("B: pullback on low volume", S["b_dry"], key="b_dry",
                           help="Average daily volume (shares) of the pullback months ≤ ratio × the average "
                                "of the 12 months ending at the high.")
-    b_vol_dry = st.number_input("B: max pullback volume ratio", 0.1, 2.0, 0.80, 0.05, disabled=not b_use_dry)
-    b_use_exp = st.toggle("B: reversal month volume ≥ pullback average", False)
+    b_vol_dry = st.number_input("B: max pullback volume ratio", 0.1, 2.0, clamp(S["b_dry_ratio"], 0.1, 2.0), 0.05,
+                                disabled=not b_use_dry, key="b_dry_ratio")
+    b_use_exp = st.toggle("B: reversal month volume ≥ pullback average", S["b_exp"], key="b_exp",
+                          help="In a month still in progress the average daily volume covers only the days "
+                               "traded so far, so this check is provisional until month-end.")
 
     with st.expander("Advanced rules"):
-        ema_span = st.number_input("EMA span (months)", 3, 36, 12)
-        min_hist = st.number_input("Min listing history (months)", 12, 120, 36)
-        min_turn = st.number_input("Min median daily turnover (Rs crore)", 0.0, 100.0, 1.0, 0.5,
+        ema_span = st.number_input("EMA span (months)", 3, 36, clamp(S["ema_span"], 3, 36), key="ema_span")
+        min_hist = st.number_input("Min listing history (months)", 12, 120, clamp(S["min_hist"], 12, 120),
+                                   key="min_hist")
+        min_turn = st.number_input("Min median daily turnover (Rs crore)", 0.0, 100.0,
+                                   clamp(S["min_turn"], 0.0, 100.0), 0.5, key="min_turn",
                                    help="Microcap 250 constituents average roughly Rs 2 cr/day.")
-        use_ext = st.toggle("Exit / skip when Close / EMA exceeds", True)
-        exit_ext = st.number_input("Extension limit (× EMA)", 1.1, 5.0, 1.7, 0.05, disabled=not use_ext)
+        use_ext = st.toggle("Exit / skip when Close / EMA exceeds", S["use_ext"], key="use_ext")
+        exit_ext = st.number_input("Extension limit (× EMA)", 1.1, 5.0, clamp(S["exit_ext"], 1.1, 5.0), 0.05,
+                                   disabled=not use_ext, key="exit_ext")
 
     st.header("Backtest portfolio")
     c1, c2 = st.columns(2)
-    slots = c1.number_input("Slots (stocks)", 1, 50, 10)
-    capital = c2.number_input("Capital (Rs)", 10_000, 1_000_000_000, 1_000_000, 100_000)
+    slots = c1.number_input("Slots (stocks)", 1, 50, clamp(S["slots"], 1, 50), key="slots")
+    capital = c2.number_input("Capital (Rs)", 10_000, 1_000_000_000, clamp(S["capital"], 10_000, 1_000_000_000),
+                              100_000, key="capital")
     c1, c2 = st.columns(2)
-    cost = c1.number_input("Cost / side (%)", 0.0, 2.0, 0.40, 0.05) / 100
-    cash_yield = c2.number_input("Cash yield (% pa)", 0.0, 12.0, 6.0, 0.5) / 100
-    execution = st.radio("Execution", ["next_open", "close"], horizontal=True,
+    cost = c1.number_input("Cost / side (%)", 0.0, 2.0, clamp(S["cost"], 0.0, 2.0), 0.05, key="cost") / 100
+    cash_yield = c2.number_input("Cash yield (% pa)", 0.0, 12.0, clamp(S["cash_yield"], 0.0, 12.0), 0.5,
+                                 key="cash_yield") / 100
+    execution = st.radio("Execution", CHOICES["execution"], index=CHOICES["execution"].index(S["execution"]),
+                         horizontal=True, key="execution",
                          format_func=lambda x: "Next day's open" if x == "next_open" else "Signal close")
-    bench_kind = st.radio("Benchmarks", ["TRI", "PRICE"], horizontal=True,
+    bench_kind = st.radio("Benchmarks", CHOICES["bench"], index=CHOICES["bench"].index(S["bench"]),
+                          horizontal=True, key="bench",
                           format_func=lambda x: "Total return (TRI)" if x == "TRI" else "Price index",
                           help="Stock prices are dividend-adjusted, so TRI is the fair comparison.")
     force = st.button("Refresh prices now", width="stretch",
@@ -273,6 +337,25 @@ with st.sidebar:
     if st.button("Clear all caches", width="stretch"):
         st.cache_data.clear()
         st.rerun()
+
+    st.divider()
+    st.subheader("Your settings")
+    if st.button("Save as default", type="primary", width="stretch",
+                 help="Stores every sidebar setting in this page's link. Bookmark the page afterwards."):
+        saved = {}
+        for k in SETTINGS:
+            v = st.session_state.get(k, S[k])
+            saved[k] = ("1" if v else "0") if isinstance(v, bool) else str(v)
+        st.query_params.from_dict(saved)
+        st.success("Saved into this page's link. **Bookmark the page now** (Ctrl+D, or ⌘+D on Mac) and "
+                   "open it from the bookmark next time. The settings come back with it.")
+    if st.button("Reset to original defaults", width="stretch"):
+        st.query_params.clear()
+        for k in SETTINGS:
+            st.session_state.pop(k, None)
+        st.rerun()
+    st.caption("Settings live in the link, not on the server, so each person keeps their own. "
+               "Sharing the link shares the settings.")
 
 P = {**E.DEFAULTS, "ema_span": int(ema_span), "min_ret": min_ret, "min_cr": min_cr,
      "min_dist_low": min_dist, "slope_window": int(slope_w), "flat_band": band,

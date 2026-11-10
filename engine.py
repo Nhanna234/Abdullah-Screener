@@ -38,13 +38,13 @@ import numpy as np
 import pandas as pd
 
 DEFAULTS = dict(
-    ema_span=12, min_ret=0.08, min_cr=0.80, min_dist_low=0.0, low_lookback=12,
+    ema_span=12, min_ret=0.05, min_cr=0.80, min_dist_low=0.30, low_lookback=12,
     slope_window=6, flat_band=0.03, allow_flat=True, exit_ext=1.70,
-    min_history=36, min_turnover_cr=1.0,
+    min_history=24, min_turnover_cr=1.0,
     slots=10, min_alloc_frac=0.20, cost=0.004, cash_yield=0.06,
     execution="next_open", capital=1_000_000.0,
-    setups="A+B",
-    b_kmax=4, b_low_lo=-0.15, b_low_hi=0.05, b_min_ret=0.08, b_min_cr=0.75,
+    setups="B",
+    b_kmax=4, b_low_lo=-0.10, b_low_hi=0.05, b_min_ret=0.05, b_min_cr=0.60,
     b_use_vol_dry=True, b_vol_dry=0.80, b_use_vol_exp=False,
 )
 FIELDS = ("Open", "High", "Low", "Close", "Volume")

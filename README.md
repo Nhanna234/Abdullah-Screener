@@ -3,14 +3,16 @@
 Streamlit app that screens NSE indices for the monthly **EMA-reclaim breakout** and backtests it.
 
 **Buy = Setup A or Setup B (month-end):**
-- **A · Reclaim** — previous close below the 12-month EMA, this close above it · month return ≥ 8% ·
+- **A · Reclaim** — previous close below the 12-month EMA, this close above it · month return ≥ 5% ·
   closing range ≥ 0.80 · EMA flat or rising over the 6 months before the signal (±3% band).
 - **B · Pullback reversal** — 12-month closing high made 2–5 months earlier (1–4 pullback candles) ·
   every close since the high at/above the EMA · EMA rising (≥ +3% in 6 months) · pullback average daily
-  volume ≤ 0.8× the 12 months ending at the high · optional: reversal-month volume ≥ pullback average ·
-  signal-month low within −15%…+5% of that month's EMA · close above EMA · return ≥ 8% · closing range ≥ 0.75.
-- **Both:** optional minimum distance above the 12-month low · not already above 1.7× EMA · ≥ 36 months of
+  volume ≤ 0.8× the 12 months ending at the high · optional (off): reversal-month volume ≥ pullback average ·
+  signal-month low within −10%…+5% of that month's EMA · close above EMA · return ≥ 5% · closing range ≥ 0.60.
+- **Both:** close ≥ 30% above the 12-month low · not already above 1.7× EMA · ≥ 24 months of
   history · liquidity floor.
+
+**Defaults:** universe Nifty Total Market, Setup B only (switch to A + B or A only in the sidebar).
 
 **Rank:** B · Pullback first, then A · Rising, then A · Flat; within each, Close / 12-month low.
 **Exit:** close below EMA or Close/EMA > 1.7.
@@ -38,6 +40,12 @@ Indices: Nifty 50, 100, 200, LargeMidcap 250, Smallcap 100, Smallcap 250, 500, M
    after 5 pm IST on trading days, and every index reuses the same stored prices.
 
 Run locally instead: `pip install -r requirements.txt` then `streamlit run app.py`.
+
+## Saving your settings
+
+Set the sidebar the way you like, press **Save as default** (bottom of the sidebar) and
+bookmark the page. The settings are stored in the page link, so opening the bookmark restores
+them, even after the app restarts. **Reset to original defaults** clears them.
 
 ## Things to know
 
