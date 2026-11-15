@@ -21,6 +21,7 @@ import pickle
 import threading
 import time
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from urllib.parse import quote
 
 import numpy as np
@@ -46,6 +47,7 @@ INDEX_FILES = {
     "Nifty Microcap 250": "ind_niftymicrocap250_list.csv",
     "Nifty Total Market": "ind_niftytotalmarket_list.csv",
 }
+CONSTITUENT_SNAPSHOTS = Path(__file__).resolve().parent / "constituents"
 CONSTITUENT_MIRRORS = ["https://niftyindices.com/IndexConstituent/{f}",
                        "https://www.niftyindices.com/IndexConstituent/{f}",
                        "https://nsearchives.nseindia.com/content/indices/{f}"]
@@ -100,6 +102,11 @@ def _download_list(fname: str) -> tuple[pd.DataFrame, str]:
             return df, url
         except Exception as e:  # noqa: BLE001
             errors.append(f"{url}: {e}")
+    snapshot = CONSTITUENT_SNAPSHOTS / fname
+    if snapshot.is_file():
+        frame = parse_constituents(pd.read_csv(snapshot))
+        if not frame.empty:
+            return frame, "NSE snapshot · 15 Nov 2026"
     raise RuntimeError("\n".join(errors))
 
 
