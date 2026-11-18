@@ -1,13 +1,14 @@
 import React, { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
-  Activity, ArrowDownToLine, ArrowRight, ArrowUpRight, BarChart3, CalendarDays,
+  Activity, ArrowDownToLine, ArrowRight, ArrowUpRight, BarChart3, BookOpenText, CalendarDays,
   ChartNoAxesCombined, ChevronDown, CircleHelp, FileSpreadsheet, Filter, Layers3,
   Menu, Play, ScanSearch, Settings2, ShieldCheck, Upload, X,
 } from 'lucide-react'
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { streamlitRequest } from './streamlit.js'
 import ChartPreview from './ChartPreview.jsx'
+import Rules from './Rules.jsx'
 import './style.css'
 
 const INDEXES = ['Nifty 50', 'Nifty 100', 'Nifty 200', 'Nifty LargeMidcap 250',
@@ -232,6 +233,7 @@ function App() {
   const update = patch => setDraft(old => ({ ...old, ...patch }))
   const report = results[mode]
   const onScreener = mode === 'screener'
+  const onRules = mode === 'rules'
 
   useEffect(() => {
     if (!streamlitRequest) {
@@ -308,7 +310,8 @@ function App() {
       <div className="nav-label">WORKSPACE</div>
       <nav>
         <button type="button" className={onScreener ? 'selected' : ''} onClick={() => switchMode('screener')}><ScanSearch size={19}/>Screener<ArrowRight className="nav-arrow" size={15}/></button>
-        <button type="button" className={!onScreener ? 'selected' : ''} onClick={() => switchMode('backtest')}><BarChart3 size={19}/>Backtest<ArrowRight className="nav-arrow" size={15}/></button>
+        <button type="button" className={mode === 'backtest' ? 'selected' : ''} onClick={() => switchMode('backtest')}><BarChart3 size={19}/>Backtest<ArrowRight className="nav-arrow" size={15}/></button>
+        <button type="button" className={onRules ? 'selected' : ''} onClick={() => switchMode('rules')}><BookOpenText size={19}/>Rules<ArrowRight className="nav-arrow" size={15}/></button>
       </nav>
       <div className="nav-label secondary">CONFIGURATION</div>
       <nav><button type="button" onClick={openSettings}><Settings2 size={19}/>Strategy settings</button></nav>
@@ -317,17 +320,17 @@ function App() {
     <main>
       <header className="topbar"><div className="breadcrumb">
         <button type="button" className="icon-button mobile-menu" aria-label="Open navigation" onClick={() => setMobileNav(true)}><Menu size={20}/></button>
-        <span>Workspace</span><span className="slash">/</span><strong>{onScreener ? 'Screener' : 'Backtest'}</strong>
+        <span>Workspace</span><span className="slash">/</span><strong>{onScreener ? 'Screener' : onRules ? 'Rules' : 'Backtest'}</strong>
       </div><button type="button" className="secondary-button small" onClick={openSettings}><Settings2 size={16}/>Settings</button></header>
       <div className="content">
         <section className="hero">
-          <div className="hero-copy"><h1>{onScreener ? 'EMA signal screener' : 'Strategy backtest'}</h1>
-            <p>{onScreener ? 'Find monthly EMA reclaims and pullback reversals across NSE equities.' : 'Measure how monthly signals translate into a slot-based portfolio.'}</p>
+          <div className="hero-copy"><h1>{onScreener ? 'EMA signal screener' : onRules ? 'Rules & logic' : 'Strategy backtest'}</h1>
+            <p>{onScreener ? 'Find monthly EMA reclaims and pullback reversals across NSE equities.' : onRules ? 'How the screener and backtest decide, with your current settings.' : 'Measure how monthly signals translate into a slot-based portfolio.'}</p>
           </div>
           <div className="hero-mark" aria-hidden="true"><ChartNoAxesCombined size={144} strokeWidth={.75}/></div>
           <div className="hero-badge"><CalendarDays size={16}/><span>Latest completed month<strong>{monthLabel(config.latest)}</strong></span></div>
         </section>
-        <form className="controls ema-controls" onSubmit={submit}>
+        {!onRules && <form className="controls ema-controls" onSubmit={submit}>
           <Field label="Stock universe"><Select value={draft.index} change={index => update({index})}>{config.indices.map(index => <option key={index}>{index}</option>)}</Select></Field>
           <Field label="Buy setup"><Select value={params.setups} change={setups => setParams(old => ({...old,setups}))}><option value="B">B · Pullback reversal</option><option value="A">A · EMA reclaim</option><option value="A+B">Both setups</option></Select></Field>
           {onScreener ? <Field label="Signal month"><input type="month" required value={draft.signal} onChange={event => update({signal:event.target.value})}/></Field> : <>
@@ -336,12 +339,14 @@ function App() {
           </>}
           <button className="primary run" type="submit" disabled={!!busy || !config.latest}><Play size={15} fill="currentColor"/>{busy === mode ? 'Running…' : onScreener ? 'Run screener' : 'Run backtest'}</button>
           {draft.csvName && <div className="attached"><FileSpreadsheet size={15}/>{draft.csvName}</div>}
-        </form>
+        </form>}
         {!!busy && !['export','chart'].includes(busy) && <div className="notice" role="status"><Activity size={17}/>Fetching market data and calculating results. The first load can take a few minutes.</div>}
         {error && <div className="notice error" role="alert">{error}</div>}
         {report && <div className="report-meta"><Filter size={15}/><strong>{report.index}</strong><span>{report.covered} / {report.constituents} stocks covered</span><span>Prices to {report.asOf}</span><span>{report.source.startsWith('http') ? 'NSE constituent list' : report.source}</span></div>}
         {report?.notices.map(message => <div key={message} className="notice"><CircleHelp size={16}/>{message}</div>)}
-        {onScreener
+        {onRules
+          ? <Rules params={params} defaults={config.params} indices={config.indices} bench={draft.bench}/>
+          : onScreener
           ? <Screener report={report} holdings={holdings} setHoldings={setHoldings} busy={busy} scan={() => submit()} requestChart={requestChart}/>
           : <Backtest report={report} download={download} exporting={busy === 'export'}/>}
         <footer><span>EMA Reclaim Lab</span><span>Signals and portfolio research</span></footer>
