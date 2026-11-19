@@ -129,7 +129,7 @@ function Settings({ close, params, setParams, draft, update }) {
   </aside></div>
 }
 
-function Screener({ report, holdings, setHoldings, busy, scan, requestChart }) {
+function Screener({ report, holdings, setHoldings, busy, scan, requestChart, download, exporting }) {
   const [view, setView] = useState('Signals')
   const [ticker, setTicker] = useState('RELIANCE')
   const [selectedChart, setSelectedChart] = useState(null)
@@ -160,7 +160,11 @@ function Screener({ report, holdings, setHoldings, busy, scan, requestChart }) {
       <Card icon={Activity} label="A · Reclaim" value={report ? num(counts['A · Rising'] + counts['A · Flat'], 0) : '—'} note="Monthly close reclaimed the EMA" tone="slate"/>
     </div>
     {report ? <>
-      <Panel title="Screener results" hint={rows.length + ' matches'} action={<Tabs options={['Signals','All candidates']} value={view} change={setView}/>}>
+      <Panel title="Screener results" hint={rows.length + ' matches'} action={<div className="panel-actions">
+        <Tabs options={['Signals','All candidates']} value={view} change={setView}/>
+        <button type="button" className="secondary-button" disabled={exporting || !report.candidates.length} onClick={download}
+          title="Download the signals and all candidates as an Excel file"><ArrowDownToLine size={16}/>{exporting ? 'Exporting…' : 'Export Excel'}</button>
+      </div>}>
         <input className="search" aria-label="Search screened stocks" placeholder="Search symbol, company, or industry" value={query} onChange={event => setQuery(event.target.value)}/>
         <Table rows={rows} columns={['Rank','Symbol','Company','Status','Setup','Month return','Closing range','Close/EMA','Reason']} pick={loadChart}/>
       </Panel>
@@ -283,16 +287,19 @@ function App() {
       setBusy('')
     }
   }
-  async function download() {
+  async function download(kind) {
     setBusy('export')
     setError('')
     try {
-      const { xlsx } = await streamlitRequest('export', { report })
+      const body = kind === 'screener' ? { kind, report: { ...report, preview: null } } : { report }
+      const { xlsx } = await streamlitRequest('export', body)
       const data = Uint8Array.from(atob(xlsx), character => character.charCodeAt(0))
       const url = URL.createObjectURL(new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
       const link = document.createElement('a')
       link.href = url
-      link.download = 'EMA Reclaim Lab Backtest.xlsx'
+      link.download = kind === 'screener'
+        ? `EMA Reclaim Lab Screener ${report.index} ${report.month}.xlsx`
+        : 'EMA Reclaim Lab Backtest.xlsx'
       link.click()
       window.setTimeout(() => URL.revokeObjectURL(url), 1000)
     } catch (failure) {
@@ -347,8 +354,9 @@ function App() {
         {onRules
           ? <Rules params={params} defaults={config.params} indices={config.indices} bench={draft.bench}/>
           : onScreener
-          ? <Screener report={report} holdings={holdings} setHoldings={setHoldings} busy={busy} scan={() => submit()} requestChart={requestChart}/>
-          : <Backtest report={report} download={download} exporting={busy === 'export'}/>}
+          ? <Screener report={report} holdings={holdings} setHoldings={setHoldings} busy={busy} scan={() => submit()} requestChart={requestChart}
+              download={() => download('screener')} exporting={busy === 'export'}/>
+          : <Backtest report={report} download={() => download('backtest')} exporting={busy === 'export'}/>}
         <footer><span>EMA Reclaim Lab</span><span>Signals and portfolio research</span></footer>
       </div>
     </main>

@@ -161,7 +161,7 @@ def screener(body, params, ind, months, latest, names, industries):
     return {"month": str(month), "provisional": month > latest,
             "counts": counts, "funnel": dated_rows(funnel.loc[:month].tail(36)),
             "candidates": records(candidates), "symbols": symbols, "preview": preview,
-            "exits": records(pd.DataFrame(exits))}
+            "exits": records(pd.DataFrame(exits)), "settings": params}
 
 
 def backtest(body, params, ind, months, latest, names, industries):
@@ -212,8 +212,32 @@ def run(body):
     return {**meta, **result}
 
 
+def export_screener(data):
+    candidates = pd.DataFrame(data.get("candidates") or [])
+    signals = candidates[candidates["Status"] == "SIGNAL"] if "Status" in candidates else candidates
+    counts = data.get("counts") or {}
+    info = [("Index", data.get("index")), ("Signal month", data.get("month")),
+            ("Provisional (month in progress)", "Yes" if data.get("provisional") else "No"),
+            ("Prices up to", data.get("asOf")), ("Constituent source", data.get("source")),
+            ("Stocks with price data", f"{data.get('covered')} of {data.get('constituents')}")]
+    info += [(f"Count · {name}", value) for name, value in counts.items()]
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        signals.to_excel(writer, sheet_name="Signals", index=False)
+        candidates.to_excel(writer, sheet_name="All candidates", index=False)
+        if data.get("exits"):
+            pd.DataFrame(data["exits"]).to_excel(writer, sheet_name="Holdings check", index=False)
+        pd.DataFrame(data.get("funnel") or []).to_excel(writer, sheet_name="Signal frequency", index=False)
+        pd.DataFrame(info, columns=["Item", "Value"]).to_excel(writer, sheet_name="Screen info", index=False)
+        pd.DataFrame((data.get("settings") or {}).items(), columns=["Setting", "Value"]).to_excel(
+            writer, sheet_name="Settings", index=False)
+    return {"xlsx": base64.b64encode(output.getvalue()).decode("ascii")}
+
+
 def export_report(body):
     data = body["report"]
+    if body.get("kind") == "screener":
+        return export_screener(data)
     sheets = {"Performance": "metrics", "Growth of 100": "growth", "Monthly values": "monthly",
               "Trades": "trades", "All signals": "allSignals", "Signal funnel": "funnel",
               "Annual returns": "annual", "Allocation": "allocation"}

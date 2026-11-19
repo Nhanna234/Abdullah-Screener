@@ -171,6 +171,8 @@ footer{color:#64776d;display:flex;justify-content:space-between;gap:12px;font-si
 .measure-result{border-radius:6px;background:#f1eef8;color:#55437d;padding:5px 8px;font-size:12px;font-weight:700}
 .drawing-active canvas{cursor:crosshair}
 
+.panel-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+
 /* Rules page */
 .rules-toc{display:flex;flex-wrap:wrap;gap:7px}
 .rules-toc a{border:1px solid var(--border);background:#fff;color:#2f5547;border-radius:99px;padding:5px 11px;font-size:12px;font-weight:700;text-decoration:none}
