@@ -162,8 +162,8 @@ function Screener({ report, holdings, setHoldings, busy, scan, requestChart, dow
     {report ? <>
       <Panel title="Screener results" hint={rows.length + ' matches'} action={<div className="panel-actions">
         <Tabs options={['Signals','All candidates']} value={view} change={setView}/>
-        <button type="button" className="secondary-button" disabled={exporting || !report.candidates.length} onClick={download}
-          title="Download the signals and all candidates as an Excel file"><ArrowDownToLine size={16}/>{exporting ? 'Exporting…' : 'Export Excel'}</button>
+        <button type="button" className="secondary-button" disabled={exporting || !report.candidates.some(row => row.Status === 'SIGNAL')} onClick={download}
+          title="Download the signal stocks as an Excel file"><ArrowDownToLine size={16}/>{exporting ? 'Exporting…' : 'Export Excel'}</button>
       </div>}>
         <input className="search" aria-label="Search screened stocks" placeholder="Search symbol, company, or industry" value={query} onChange={event => setQuery(event.target.value)}/>
         <Table rows={rows} columns={['Rank','Symbol','Company','Status','Setup','Month return','Closing range','Close/EMA','Reason']} pick={loadChart}/>
@@ -291,14 +291,16 @@ function App() {
     setBusy('export')
     setError('')
     try {
-      const body = kind === 'screener' ? { kind, report: { ...report, preview: null } } : { report }
+      const body = kind === 'screener'
+        ? { kind, report: { candidates: report.candidates.filter(row => row.Status === 'SIGNAL') } }
+        : { report }
       const { xlsx } = await streamlitRequest('export', body)
       const data = Uint8Array.from(atob(xlsx), character => character.charCodeAt(0))
       const url = URL.createObjectURL(new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
       const link = document.createElement('a')
       link.href = url
       link.download = kind === 'screener'
-        ? `EMA Reclaim Lab Screener ${report.index} ${report.month}.xlsx`
+        ? `EMA Reclaim Lab Signals ${report.index} ${report.month}.xlsx`
         : 'EMA Reclaim Lab Backtest.xlsx'
       link.click()
       window.setTimeout(() => URL.revokeObjectURL(url), 1000)

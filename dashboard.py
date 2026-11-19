@@ -213,24 +213,12 @@ def run(body):
 
 
 def export_screener(data):
+    """Excel file with the signal stocks only (stocks that passed every rule)."""
     candidates = pd.DataFrame(data.get("candidates") or [])
     signals = candidates[candidates["Status"] == "SIGNAL"] if "Status" in candidates else candidates
-    counts = data.get("counts") or {}
-    info = [("Index", data.get("index")), ("Signal month", data.get("month")),
-            ("Provisional (month in progress)", "Yes" if data.get("provisional") else "No"),
-            ("Prices up to", data.get("asOf")), ("Constituent source", data.get("source")),
-            ("Stocks with price data", f"{data.get('covered')} of {data.get('constituents')}")]
-    info += [(f"Count · {name}", value) for name, value in counts.items()]
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         signals.to_excel(writer, sheet_name="Signals", index=False)
-        candidates.to_excel(writer, sheet_name="All candidates", index=False)
-        if data.get("exits"):
-            pd.DataFrame(data["exits"]).to_excel(writer, sheet_name="Holdings check", index=False)
-        pd.DataFrame(data.get("funnel") or []).to_excel(writer, sheet_name="Signal frequency", index=False)
-        pd.DataFrame(info, columns=["Item", "Value"]).to_excel(writer, sheet_name="Screen info", index=False)
-        pd.DataFrame((data.get("settings") or {}).items(), columns=["Setting", "Value"]).to_excel(
-            writer, sheet_name="Settings", index=False)
     return {"xlsx": base64.b64encode(output.getvalue()).decode("ascii")}
 
 

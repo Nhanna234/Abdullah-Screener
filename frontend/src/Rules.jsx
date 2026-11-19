@@ -175,10 +175,9 @@ export default function Rules({ params, defaults, indices, bench }) {
           near-misses: Setup A stocks that crossed above the EMA, and Setup B stocks whose high, pullback and above-EMA
           closes are in place and whose low reached the EMA zone. The Reason column lists every rule a stock failed.</li>
         <li><strong>Counts:</strong> Eligible stocks, Buy signals, B · Pullback, and A · Reclaim (Rising + Flat).</li>
-        <li><strong>Export Excel</strong> (next to the Signals / All candidates switch) downloads the screen with every
-          column: Signals, All candidates (with the Reason for each rejection), Holdings check (when holdings were
-          entered), Signal frequency, Screen info (index, month, price date, constituent source, counts) and the
-          Settings used for that run. The search box does not filter the download.</li>
+        <li><strong>Export Excel</strong> (next to the Signals / All candidates switch) downloads the signal stocks only
+          (stocks that passed every active rule), with every column, in rank order. It is greyed out when the month has
+          no signals. The search box and the All candidates view do not change the download.</li>
         <li><strong>Signal frequency:</strong> monthly signal counts by setup for the 36 months up to the signal month.</li>
         <li><strong>Check exits:</strong> for each holding on the signal month’s close: “Exit · Close &lt; EMA” if the close
           is below the EMA; “Exit · Extension limit” if close ÷ EMA is above {ext}; otherwise “Hold”.</li>
