@@ -367,8 +367,8 @@ def fetch_index_yahoo(ticker: str, start: date, end: date) -> pd.Series:
     return c.dropna()
 
 
-def fetch_benchmarks(start: date, end: date, kind: str = "TRI") -> tuple[pd.DataFrame, dict]:
-    """Monthly (period index) closes of Nifty 50 and Nifty 500. kind: 'TRI' or 'PRICE'."""
+def fetch_benchmarks(start: date, end: date, kind: str = "TRI", freq: str = "M") -> tuple[pd.DataFrame, dict]:
+    """Period-end closes of Nifty 50 and Nifty 500 (freq 'M' monthly, 'W-FRI' weekly). kind: 'TRI' or 'PRICE'."""
     out, src = {}, {}
     for name, (api, yh) in BENCH.items():
         ser = None
@@ -389,6 +389,6 @@ def fetch_benchmarks(start: date, end: date, kind: str = "TRI") -> tuple[pd.Data
             except Exception as e:  # noqa: BLE001
                 src[name] = "unavailable - " + "; ".join(errs + [f"Yahoo: {e}"])
                 continue
-        m = ser.groupby(ser.index.to_period("M")).last()
+        m = ser.groupby(ser.index.to_period(freq)).last()
         out[name] = m
     return (pd.concat(out, axis=1) if out else pd.DataFrame()), src

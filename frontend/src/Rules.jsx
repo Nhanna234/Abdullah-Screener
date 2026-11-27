@@ -1,13 +1,14 @@
 // Rules & logic page.
 // KEEP IN SYNC: this page documents engine.py (signals, screener, backtest, statistics),
+// engine_weekly.py (weekly Setup B: 10W EMA, entries, target/stop exits, daily simulation),
 // dashboard.py (screener/backtest/chart requests) and data.py (constituents, prices,
 // benchmarks). Parameter values are read live from the current settings, and defaults
-// come from engine.DEFAULTS through dashboard_config(). Whenever the logic in those files
+// come from engine.DEFAULTS + engine_weekly.W_DEFAULTS through dashboard_config(). Whenever the logic in those files
 // changes, update the text below and LOGIC_REVIEWED.
 import React from 'react'
 import { BookOpenText, CircleHelp } from 'lucide-react'
 
-const LOGIC_REVIEWED = '19 Nov 2026'
+const LOGIC_REVIEWED = '27 Nov 2026'
 
 const pct = v => v == null ? 'off' : `${+(v * 100).toFixed(2)}%`
 const signedPct = v => v == null ? 'off' : `${v > 0 ? '+' : v < 0 ? '−' : ''}${+(Math.abs(v) * 100).toFixed(2)}%`
@@ -18,12 +19,15 @@ const crore = v => `₹${v} crore`
 const rupees = v => '₹' + Number(v).toLocaleString('en-IN')
 const setupName = v => ({ B: 'B only', A: 'A only', 'A+B': 'A + B' }[v] || v)
 const execName = v => v === 'close' ? 'at the signal month’s close' : 'at the next trading day’s open'
+const weekExec = v => v === 'close' ? 'at that Friday’s close' : 'at the next trading day’s open'
 
+const W_KMAX_LIMIT = 8            // engine_weekly.W_KMAX_LIMIT: near-misses need a 52-week high this recent
 const SECTIONS = [
   ['rules-overview', 'Overview'], ['rules-data', 'Universe & data'], ['rules-monthly', 'Monthly candles'],
   ['rules-eligible', 'Eligibility'], ['rules-a', 'Setup A'], ['rules-b', 'Setup B'],
   ['rules-common', 'Common filters'], ['rules-rank', 'Ranking'], ['rules-screener', 'Screener'],
-  ['rules-backtest', 'Backtest'], ['rules-stats', 'Benchmarks & statistics'], ['rules-limits', 'Limitations'],
+  ['rules-backtest', 'Backtest'], ['rules-stats', 'Benchmarks & statistics'], ['rules-weekly', 'Weekly · 10W EMA'],
+  ['rules-limits', 'Limitations'],
 ]
 
 function Section({ id, title, children }) {
@@ -61,6 +65,9 @@ export default function Rules({ params, defaults, indices, bench }) {
         <li>The two setups never overlap. A needs last month’s close <em>below</em> the EMA. B needs every close since the
           recent high <em>at or above</em> it.</li>
         <li>Exits are the same for both setups: a month-end close below the EMA, or a close too far above it (extension limit).</li>
+        <li>Sections 2–11 describe the <strong>Monthly</strong> timeframe. The <strong>Weekly</strong> timeframe (Timeframe
+          box above the results) runs Setup B on weekly candles with a 10-week EMA, a fixed target and stop-loss, and its own
+          entry triggers. It shares the universe, price data and portfolio settings, and is described in section 12.</li>
       </ul>
     </Section>
 
@@ -235,7 +242,111 @@ export default function Rules({ params, defaults, indices, bench }) {
       </ul>
     </Section>
 
-    <Section id="rules-limits" title="12. Known limitations">
+
+    <Section id="rules-weekly" title="12. Weekly timeframe · Pullback to the 10W EMA">
+      <h3>Weekly candles</h3>
+      <ul>
+        <li>Built from the same cleaned daily prices. Weeks end on Friday: open = first day’s open, high = highest high,
+          low = lowest low, close = last day’s close.</li>
+        <li><strong>EMA:</strong> <V k="w_ema"/>-week exponential moving average of weekly closes.</li>
+        <li><strong>Turnover:</strong> the median of daily close × volume within each week; the liquidity filter uses the
+          median of the last 26 weekly values (at least 13 needed).</li>
+        <li>A week in progress can be screened, but its results are provisional until Friday’s close. Backtests end on the
+          last completed week.</li>
+      </ul>
+      <h3>Setup (all must hold, using only weeks before the touch week)</h3>
+      <ol>
+        <li><strong>52-week high:</strong> the highest weekly close of the 52 weeks before the touch week was made
+          2 to {(p.w_kmax ?? 0) + 1} weeks before it, leaving 1 to <V k="w_kmax"/> pullback weeks. If last week is itself the
+          high, there is no setup. If two weeks tie, the more recent one counts.</li>
+        <li><strong>Closes above the EMA:</strong> every weekly close from the high week to last week is at or above that
+          week’s 10W EMA.</li>
+        <li><strong>EMA rising:</strong> last week’s EMA ÷ the EMA <V k="w_slope_window"/> weeks earlier − 1 ≥{' '}
+          <V k="w_min_slope" f={signedPct}/>.</li>
+        <li><strong>Low-volume pullback</strong> (currently <V k="w_use_vol_dry" f={onOff}/>): average daily volume of the
+          pullback weeks ≤ <V k="w_vol_dry" f={times}/> the average of the 10 weeks ending at the high week (at least 6 weeks
+          needed). There is no volume rule for the entry week.</li>
+        <li><strong>Off the low:</strong> last week’s close ÷ the lowest weekly low of the 52 weeks before the touch week − 1
+          ≥ <V k="min_dist_low" f={pct}/> (the shared setting).</li>
+        <li><strong>Eligibility:</strong> at least <V k="min_history"/> months of history, counted as{' '}
+          {Math.round((p.min_history ?? 0) * 52 / 12)} weekly closes, and a 26-week median daily turnover of at least{' '}
+          <V k="min_turnover_cr" f={crore}/>.</li>
+      </ol>
+      <h3>Touching the EMA</h3>
+      <ul>
+        <li>The reference line is <strong>last week’s 10W EMA</strong>, the value on the chart when the touch week opens. The
+          touch week’s own EMA is only known at Friday’s close, so a Tuesday entry cannot use it.</li>
+        <li><strong>Touch:</strong> a daily low at or below the line × (1 <V k="w_low_hi" f={signedPct}/>).</li>
+        <li><strong>Too deep:</strong> if the week’s low falls below the line × (1 <V k="w_low_lo" f={signedPct}/>) before an
+          entry, the setup is cancelled for that week. On the day of an entry, that day’s own low also counts.</li>
+      </ul>
+      <h3>Entry (the first that happens; one position per stock)</h3>
+      <ol>
+        <li><strong>Prev-week high break:</strong> after the touch, the first day whose high is above last week’s high. The buy
+          fills at last week’s high, or at the day’s open if it opens above that. On the touch day itself, it only counts
+          if the day opened at or below last week’s high.</li>
+        <li><strong>Strong close:</strong> no entry yet, and the touch week closes at or above its own 10W EMA with a weekly
+          closing range of at least <V k="b_min_cr"/> (B’s min. closing range setting). The buy is made{' '}
+          <V k="execution" f={weekExec}/>.</li>
+        <li><strong>Touch-week high break:</strong> the touch week closes at or above its 10W EMA but with a lower closing
+          range. In the following week, the first day whose high is above the touch week’s high buys, with the same fill
+          rule. If it does not happen that week, the setup expires.</li>
+        <li>A touch week that closes below its 10W EMA ends the setup. A stock already held is skipped. If two setups of one
+          stock trigger on the same day, only one entry is made.</li>
+      </ol>
+      <h3>Exit (checked on daily prices, from the exact entry price)</h3>
+      <ul>
+        <li><strong>Target</strong> = entry × (1 + <V k="w_target" f={pct}/>). <strong>Stop-loss</strong> = entry × (1 −{' '}
+          <V k="w_stop" f={pct}/>).</li>
+        <li><strong>Entry day:</strong> when the buy filled during the day, only the close is compared (a close at or below the
+          stop exits at the stop; at or above the target exits at the target), because the order of the day’s low and high
+          against the fill is unknown. When the buy filled at the open, the day’s low and high count.</li>
+        <li><strong>Later days:</strong> an open at or below the stop exits at the open; an open at or above the target exits at
+          the open; otherwise a low at or below the stop exits at the stop and a high at or above the target exits at the
+          target. If both are touched on the same day, the stop is assumed to come first.</li>
+        <li><strong>Trend exit:</strong> a weekly close below the 10W EMA (including the entry week) sells{' '}
+          <V k="execution" f={weekExec}/>.</li>
+        <li>There is no time stop. If a stock’s prices stop for more than 5 trading days before the end of the test, it is sold
+          at its last close. An exit due after the last day is marked pending.</li>
+      </ul>
+      <h3>Weekly backtest</h3>
+      <ul>
+        <li>Runs day by day from the first trading day of the first signal month to the last completed week that ends in the
+          final valuation month. Portfolio value is recorded at each week’s last trading day.</li>
+        <li>Each day, exits are made before entries. New entries that day are ranked by last week’s close ÷ 52-week low; free
+          slots are filled from the top.</li>
+        <li>Position size, the <V k="min_alloc_frac" f={pct}/> minimum, <V k="slots"/> slots, <V k="capital" f={rupees}/>{' '}
+          starting cash and <V k="cost" f={pct}/> cost per side work as in the monthly backtest. Equity for sizing uses the
+          previous day’s closes. Idle cash earns <V k="cash_yield" f={pct}/> a year, compounded daily (252 days).</li>
+        <li><strong>All signals:</strong> every entry as its own equal trade with no slot limit, one position per stock at a
+          time.</li>
+        <li>Benchmarks and the equal-weight universe use Friday closes. Statistics are annualised on 52 weeks (volatility
+          × √52), the rolling chart shows 52-week returns, and the monthly labels become weekly (Weekly tab, best and worst
+          week, positive weeks, weeks beating). Trade statistics add average weeks held and the count of target, stop-loss
+          and EMA exits.</li>
+      </ul>
+      <h3>Weekly screener</h3>
+      <ul>
+        <li><strong>Signal week:</strong> the week containing the chosen date; defaults to the latest completed week.</li>
+        <li><strong>TRIGGERED:</strong> an entry happened during the week (any of the three types). Trigger = the fill price,
+          with its stop-loss and target.</li>
+        <li><strong>BUY NEXT OPEN:</strong> a strong close this week. Trigger shows Friday’s close; the real stop and target
+          follow the actual fill.</li>
+        <li><strong>BUY STOP:</strong> touched and closed above the EMA with a lower closing range: buy above this week’s high
+          next week.</li>
+        <li><strong>WATCH:</strong> every setup rule passes for next week. Wait for a low inside the zone shown (based on this
+          week’s EMA), then buy above this week’s high.</li>
+        <li><strong>Rejected</strong> (All candidates only): came into the week above the EMA, touched the zone, and had a
+          52-week high within the last {W_KMAX_LIMIT + 1} weeks, but failed a rule. The Reason column lists every failure.</li>
+        <li>Rows are ranked by status, then by close ÷ 52-week low. Each stock appears once. <strong>Export Excel</strong>{' '}
+          downloads every row that is not Rejected.</li>
+        <li><strong>Check exits:</strong> “Exit · Weekly close &lt; 10W EMA” or “Hold”. Target and stop-loss need your own entry
+          price, so they are not checked here.</li>
+        <li><strong>Chart:</strong> opens on weekly candles with the <V k="w_ema"/>-week EMA and marks the signal week.</li>
+      </ul>
+    </Section>
+
+    <Section id="rules-limits" title="13. Known limitations">
       <ul>
         <li><strong>Survivorship bias:</strong> today’s constituent list is used for every past month. Stocks that failed
           and left the index are missing, which flatters the backtest. Treat results as an upper bound.</li>
@@ -244,6 +355,9 @@ export default function Rules({ params, defaults, indices, bench }) {
         <li>Volume rules use Yahoo’s daily share volume. If a split falls inside the comparison window and Yahoo has not
           adjusted that stock’s volume history, the volume ratio is distorted.</li>
         <li>Signals for a month in progress can change until the month-end close.</li>
+        <li><strong>Weekly:</strong> daily candles do not show the order of moves within a day. A touch and a break on the same
+          day assume the touch came first; a stop and target on the same day assume the stop came first. Stops and buy
+          triggers fill exactly at their level unless the day opens beyond it; real fills can be worse in fast markets.</li>
       </ul>
       <p className="rules-foot"><BookOpenText size={14}/> Rules output, not investment advice.</p>
     </Section>

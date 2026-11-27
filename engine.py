@@ -397,19 +397,20 @@ def ew_universe(ind, months, start_idx, end_idx) -> pd.Series:
 
 
 # ═══════════════════════════════════════════════════════════ analytics
-def perf_stats(v: pd.Series, rf: float) -> dict:
+def perf_stats(v: pd.Series, rf: float, periods: int = 12) -> dict:
+    """periods: return periods per year (12 for monthly values, 52 for weekly)."""
     v = v.dropna()
     r = v.pct_change().dropna()
     if len(r) < 1:
         return {}
-    yrs = len(r) / 12
+    yrs = len(r) / periods
     dd = v / v.cummax() - 1
     under = (dd < 0).astype(int)
     longest = under.groupby((under == 0).cumsum()).sum().max()
-    vol = r.std() * np.sqrt(12) if len(r) > 1 else np.nan
-    down = r[r < 0].std() * np.sqrt(12) if (r < 0).sum() > 1 else np.nan
+    vol = r.std() * np.sqrt(periods) if len(r) > 1 else np.nan
+    down = r[r < 0].std() * np.sqrt(periods) if (r < 0).sum() > 1 else np.nan
     cagr = (v.iloc[-1] / v.iloc[0]) ** (1 / yrs) - 1 if yrs > 0 else np.nan
-    ex = r.mean() * 12 - rf
+    ex = r.mean() * periods - rf
     return {"Total return": v.iloc[-1] / v.iloc[0] - 1,
             "CAGR": cagr if yrs >= 1 else np.nan,
             "Volatility (ann.)": vol,
@@ -422,14 +423,14 @@ def perf_stats(v: pd.Series, rf: float) -> dict:
             "Positive months": (r > 0).mean()}
 
 
-def relative_stats(strat: pd.Series, bench: pd.Series) -> dict:
+def relative_stats(strat: pd.Series, bench: pd.Series, periods: int = 12) -> dict:
     a = pd.concat([strat.pct_change(), bench.pct_change()], axis=1).dropna()
     if len(a) < 6:
         return {}
     s, b = a.iloc[:, 0], a.iloc[:, 1]
     beta = np.cov(s, b)[0, 1] / b.var()
     up, dn = b > 0, b < 0
-    return {"Beta": beta, "Alpha (ann.)": (s.mean() - beta * b.mean()) * 12,
+    return {"Beta": beta, "Alpha (ann.)": (s.mean() - beta * b.mean()) * periods,
             "Correlation": s.corr(b),
             "Up capture": s[up].mean() / b[up].mean() if up.any() else np.nan,
             "Down capture": s[dn].mean() / b[dn].mean() if dn.any() else np.nan,

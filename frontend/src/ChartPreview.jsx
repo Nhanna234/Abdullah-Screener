@@ -106,10 +106,13 @@ function Candles({ data, period, range, showEma, showLow, signal, controls }) {
     candle.setData(bars.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })))
     ema.setData(bars.filter(bar => bar.ema != null).map(bar => ({ time: bar.time, value: bar.ema })))
     low.setData(bars.filter(bar => bar.low12 != null).map(bar => ({ time: bar.time, value: bar.low12 })))
-    const signalCandle = signal && period === '1M' && bars.find(bar => bar.time === data.month + '-01')
+    const signalCandle = signal && (data.week
+      ? period === '1W' && bars.find(bar => bar.time === data.week)
+      : period === '1M' && bars.find(bar => bar.time === data.month + '-01'))
     if (signalCandle) {
       createSeriesMarkers(candle, [{ time: signalCandle.time, position: 'belowBar', color: '#08785b',
-        shape: 'arrowUp', text: 'Signal · ' + signalMonthLabel.format(new Date(signalCandle.time)) }])
+        shape: 'arrowUp', text: data.week ? 'Week ending ' + dateLabel.format(new Date(data.month))
+          : 'Signal · ' + signalMonthLabel.format(new Date(signalCandle.time)) }])
     }
     chart.subscribeCrosshairMove(event => {
       const point = event.seriesData.get(candle)
@@ -172,7 +175,7 @@ function Candles({ data, period, range, showEma, showLow, signal, controls }) {
       chartRef.current = null
       chart.remove()
     }
-  }, [bars, data.month, period, signal])
+  }, [bars, data.month, data.week, period, signal])
 
   useEffect(() => {
     chartRef.current?.ema.applyOptions({ visible: showEma })
@@ -258,12 +261,18 @@ export default function ChartPreview({ data, ticker, setTicker, load, busy, shor
   const showingInput = !shortlisted.length || !selected
   const canDraw = !!data?.series[period]?.length
   const reset = () => controls.current?.reset()
+  const weeklyData = data?.timeframe === 'weekly'
+  useEffect(() => {
+    const view = weeklyData ? '1W' : '1M'
+    setPeriod(view)
+    setRange(INITIAL_RANGE[view])
+  }, [weeklyData])
 
   return <section className="panel chart-preview" aria-label="Price chart preview">
     <div className="panel-head">
       <div><h2>Price chart preview</h2><p>{data ? [
         data.symbol,
-        signal && 'Signal ' + signalMonthLabel.format(new Date(data.month + '-01')),
+        signal && (data.week ? 'Week ending ' + dateLabel.format(new Date(data.month)) : 'Signal ' + signalMonthLabel.format(new Date(data.month + '-01'))),
         data.asOf && 'Adjusted NSE prices through ' + dateLabel.format(new Date(data.asOf)),
       ].filter(Boolean).join(' · ') : 'Choose an NSE ticker or select one in the screener results.'}</p></div>
       <form className="chart-ticker" onSubmit={event => { event.preventDefault(); load(ticker) }}>

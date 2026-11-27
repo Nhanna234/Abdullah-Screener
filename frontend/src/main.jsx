@@ -20,15 +20,19 @@ const DEFAULTS = {
   execution: 'next_open', capital: 1000000, setups: 'B', b_kmax: 4, b_low_lo: -.1,
   b_low_hi: .05, b_min_ret: .05, b_min_cr: .6, b_use_vol_dry: true,
   b_vol_dry: .8, b_use_vol_exp: false,
+  w_ema: 10, w_slope_window: 6, w_min_slope: .02, w_kmax: 4, w_low_lo: -.05, w_low_hi: .03,
+  w_target: .2, w_stop: .075, w_use_vol_dry: false, w_vol_dry: .8,
 }
 const BENCH_COLORS = { Strategy: '#107457', 'Nifty 50': '#849991', 'Nifty 500': '#bf8b3e', 'Equal-weight universe': '#7587b7' }
 const SIGNAL_COLORS = { 'B · Pullback': '#107457', 'A · Rising': '#b28549', 'A · Flat': '#7587b7' }
+const ENTRY_COLORS = { 'Prev-week high break': '#107457', 'Strong close': '#b28549', 'Touch-week high break': '#7587b7' }
 const num = (value, digits = 2) => Number.isFinite(value) ? value.toLocaleString('en-IN', { maximumFractionDigits: digits }) : '—'
 const pct = value => Number.isFinite(value) ? (value * 100).toFixed(1) + '%' : '—'
 const rupee = value => Number.isFinite(value) ? '₹' + num(value, 0) : '—'
-const monthLabel = value => value ? new Date(value + '-01T00:00:00Z').toLocaleDateString('en-GB',
-  { month: 'short', year: 'numeric', timeZone: 'UTC' }) : '—'
-const percentPattern = /return|drawdown|volatility|cash %|exposure|expectancy|slope|above 12m low|low vs ema|win rate|avg win|avg loss|positive months|months beating|alpha|share of profit/i
+const monthLabel = value => !value ? '—' : value.length > 7
+  ? new Date(value + 'T00:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })
+  : new Date(value + '-01T00:00:00Z').toLocaleDateString('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' })
+const percentPattern = /return|drawdown|volatility|cash %|exposure|expectancy|slope|above 12m low|low vs ema|win rate|avg win|avg loss|positive months|months beating|alpha|share of profit|close vs ema|above 52w low|positive weeks|weeks beating/i
 function format(value, key) {
   if (value == null) return '—'
   if (typeof value !== 'number') return String(value)
@@ -63,7 +67,7 @@ function Table({ rows, columns, pick }) {
   return <div className="table-scroll"><table><thead><tr>{keys.map(key => <th key={key} scope="col">{key}</th>)}</tr></thead>
     <tbody>{rows.map((row, index) => <tr key={index}>{keys.map(key => <td key={key}>
       {key === 'Symbol' && pick ? <button type="button" className="symbol-button" onClick={() => pick(row.Symbol)}>{row.Symbol}</button>
-        : key === 'Status' ? <span className={'status ' + (row.Status === 'SIGNAL' ? 'passes' : '')}>{row.Status}</span>
+        : key === 'Status' ? <span className={'status ' + (row.Status !== 'Rejected' ? 'passes' : '')}>{row.Status}</span>
           : format(row[key], row.Metric || key)}
     </td>)}</tr>)}</tbody></table></div>
 }
@@ -71,13 +75,14 @@ function Plot({ rows, palette, tick = num, bars = false }) {
   const Chart = bars ? BarChart : LineChart
   const [hidden, setHidden] = useState([])
   const keys = Object.keys(palette).filter(key => key in (rows?.[0] || {}))
+  const x = rows?.[0] && 'Week' in rows[0] ? 'Week' : 'Month'
   if (!rows?.length || !keys.length) return <div className="empty">No data for this chart.</div>
   return <>
     <div className="legend">{keys.map(key => <button type="button" key={key} aria-pressed={!hidden.includes(key)} className={hidden.includes(key) ? 'muted' : ''} onClick={() => setHidden(old => old.includes(key) ? old.filter(k => k !== key) : [...old, key])}><i style={{ background: palette[key] }}/>{key}</button>)}</div>
     <div className="plot"><ResponsiveContainer width="100%" height="100%">
       <Chart data={rows} margin={{ left: -9, top: 13, right: 17, bottom: 4 }}>
         <CartesianGrid stroke="#e4ebe7" vertical={false} strokeDasharray="4 4"/>
-        <XAxis dataKey="Month" tickFormatter={monthLabel} tickLine={false} axisLine={false} minTickGap={36} tick={{ fill: '#63746b', fontSize: 11 }} tickMargin={10}/>
+        <XAxis dataKey={x} tickFormatter={monthLabel} tickLine={false} axisLine={false} minTickGap={36} tick={{ fill: '#63746b', fontSize: 11 }} tickMargin={10}/>
         <YAxis tickFormatter={value => tick(value)} tickLine={false} axisLine={false} tick={{ fill: '#63746b', fontSize: 11 }} width={66} allowDecimals={!bars} domain={bars ? [0,'auto'] : ['auto','auto']}/>
         <Tooltip labelFormatter={monthLabel} formatter={value => tick(value)} contentStyle={{ border: '1px solid #dce6df', borderRadius: 10 }}/>
         {keys.filter(key => !hidden.includes(key)).map((key, i) => bars
@@ -105,7 +110,7 @@ function Settings({ close, params, setParams, draft, update }) {
     <label className="check"><input type="checkbox" checked={!!draft.refresh} onChange={event => update({ refresh: event.target.checked })}/>Refresh prices on next run</label>
     <h3>Shared rules</h3><div className="setting-grid">
       {number('ema_span','EMA span (months)',3,36)}{number('slope_window','Slope window (months)',2,12)}
-      {number('flat_band','Flat EMA band (%)',0,20,.5,100)}{number('min_dist_low','Min. above 12-month low (%)',0,500,5,100)}
+      {number('flat_band','Flat EMA band (%)',0,20,.5,100)}{number('min_dist_low','Min. above 12-month / 52-week low (%)',0,500,5,100)}
       {number('min_history','Min. history (months)',12,120)}{number('min_turnover_cr','Min. daily turnover (₹ crore)',0,100,.5)}
       <label className="check"><input type="checkbox" checked={params.exit_ext != null} onChange={event => put('exit_ext',event.target.checked ? 1.7 : null)}/>Use extension limit</label>
       {number('exit_ext','Extension limit (× EMA)',1.1,5,.05,1,1.7)}
@@ -119,6 +124,15 @@ function Settings({ close, params, setParams, draft, update }) {
       {number('b_low_hi','Low vs EMA, max. (%)',0,50,1,100)}{number('b_vol_dry','Max. pullback volume ratio',.1,2,.05)}
       {toggle('b_use_vol_dry','Require lower pullback volume')}{toggle('b_use_vol_exp','Require reversal volume expansion')}
     </div>
+    <h3>Weekly · Pullback to the 10W EMA</h3>
+    <p className="drawer-note">Also uses B’s min. closing range and the shared, portfolio and execution settings.</p>
+    <div className="setting-grid">
+      {number('w_ema','EMA span (weeks)',3,36)}{number('w_slope_window','Slope window (weeks)',2,26)}
+      {number('w_min_slope','Min. EMA slope (%)',0,50,.5,100)}{number('w_kmax','Max. pullback weeks',1,8)}
+      {number('w_low_lo','Low vs EMA, min. (%)',-30,0,.5,100)}{number('w_low_hi','Low vs EMA, max. (%)',0,30,.5,100)}
+      {number('w_target','Target (%)',1,200,.5,100)}{number('w_stop','Stop-loss (%)',.5,50,.5,100)}
+      {number('w_vol_dry','Max. pullback volume ratio',.1,2,.05)}{toggle('w_use_vol_dry','Require lower pullback volume')}
+    </div>
     <h3>Portfolio & benchmarks</h3><div className="setting-grid">
       {number('slots','Portfolio slots',1,50)}{number('capital','Starting capital (₹)',10000,1e9,100000)}
       {number('cost','Trading cost per side (%)',0,2,.05,100)}{number('cash_yield','Idle cash yield (% p.a.)',0,12,.5,100)}
@@ -129,7 +143,8 @@ function Settings({ close, params, setParams, draft, update }) {
   </aside></div>
 }
 
-function Screener({ report, holdings, setHoldings, busy, scan, requestChart, download, exporting }) {
+const WEEKLY_COLUMNS = ['Rank','Symbol','Company','Status','Action','Trigger','Stop-loss','Target','Entry date','Close vs EMA','Low vs EMA','Closing range','Reason']
+function Screener({ report, weekly, holdings, setHoldings, busy, scan, requestChart, download, exporting }) {
   const [view, setView] = useState('Signals')
   const [ticker, setTicker] = useState('RELIANCE')
   const [selectedChart, setSelectedChart] = useState(null)
@@ -147,35 +162,44 @@ function Screener({ report, holdings, setHoldings, busy, scan, requestChart, dow
   }
   const [query, setQuery] = useState('')
   const rows = report?.candidates.filter(row =>
-    (view === 'All candidates' || row.Status === 'SIGNAL') &&
+    (view === 'All candidates' || row.Status !== 'Rejected') &&
     [row.Symbol,row.Company,row.Industry].some(value => value?.toLowerCase().includes(query.trim().toLowerCase())),
   )
   const counts = report?.counts || {}
+  const picked = [...new Set(report?.candidates.filter(row => row.Status !== 'Rejected').map(row => row.Symbol) || [])]
   return <>
-    <div className="section-header"><div><h2>Signal overview</h2><p>{report ? monthLabel(report.month) + (report.provisional ? ' · Provisional' : '') : 'Run the screener to see qualifying stocks'}</p></div></div>
-    <div className="metrics">
+    <div className="section-header"><div><h2>Signal overview</h2><p>{report ? (weekly ? 'Week ending ' : '') + monthLabel(report.month) + (report.provisional ? ' · Provisional' : '') : 'Run the screener to see qualifying stocks'}</p></div></div>
+    {weekly ? <div className="metrics">
+      <Card icon={Layers3} label="Setups" value={num(counts['Setups (all pre-week rules)'], 0)} note="Every pre-week rule passed"/>
+      <Card icon={ScanSearch} label="Triggered" value={num(counts.TRIGGERED, 0)} note="Entries during the week"/>
+      <Card icon={ArrowUpRight} label="Ready" value={report ? num(counts['BUY NEXT OPEN'] + counts['BUY STOP'], 0) : '—'} note="Buy at next open or above the week’s high" tone="amber"/>
+      <Card icon={Activity} label="Watch list" value={num(counts.WATCH, 0)} note="Needs a touch of the 10W EMA" tone="slate"/>
+    </div> : <div className="metrics">
       <Card icon={Layers3} label="Eligible stocks" value={num(counts.Eligible, 0)} note="History and turnover filters"/>
       <Card icon={ScanSearch} label="Buy signals" value={num(counts.Signals, 0)} note="Passed every active rule"/>
       <Card icon={ArrowUpRight} label="B · Pullback" value={num(counts['B · Pullback'], 0)} note="Reversal near a rising EMA" tone="amber"/>
       <Card icon={Activity} label="A · Reclaim" value={report ? num(counts['A · Rising'] + counts['A · Flat'], 0) : '—'} note="Monthly close reclaimed the EMA" tone="slate"/>
-    </div>
+    </div>}
     {report ? <>
       <Panel title="Screener results" hint={rows.length + ' matches'} action={<div className="panel-actions">
         <Tabs options={['Signals','All candidates']} value={view} change={setView}/>
-        <button type="button" className="secondary-button" disabled={exporting || !report.candidates.some(row => row.Status === 'SIGNAL')} onClick={download}
+        <button type="button" className="secondary-button" disabled={exporting || !report.candidates.some(row => row.Status !== 'Rejected')} onClick={download}
           title="Download the signal stocks as an Excel file"><ArrowDownToLine size={16}/>{exporting ? 'Exporting…' : 'Export Excel'}</button>
       </div>}>
         <input className="search" aria-label="Search screened stocks" placeholder="Search symbol, company, or industry" value={query} onChange={event => setQuery(event.target.value)}/>
-        <Table rows={rows} columns={['Rank','Symbol','Company','Status','Setup','Month return','Closing range','Close/EMA','Reason']} pick={loadChart}/>
+        <Table rows={rows} columns={weekly ? WEEKLY_COLUMNS : ['Rank','Symbol','Company','Status','Setup','Month return','Closing range','Close/EMA','Reason']} pick={loadChart}/>
       </Panel>
-    </> : <div className="two-panels">
+    </> : weekly ? <div className="two-panels">
+      <Panel title="Weekly setup" hint="A pullback to a rising 10-week EMA"><div className="setup"><ArrowUpRight size={25}/><p>A stock 1–4 weeks off its 52-week closing high, closing above a rising 10W EMA, dips to the EMA this week.</p></div></Panel>
+      <Panel title="Entry and exit" hint="Fixed target and stop from the entry price"><div className="setup amber"><Activity size={25}/><p>Buy on a break of last week’s high or on a strong weekly close. Exit at the target, the stop-loss, or a weekly close below the 10W EMA.</p></div></Panel>
+    </div> : <div className="two-panels">
       <Panel title="A · EMA reclaim" hint="From below the average to a strong close"><div className="setup"><Activity size={25}/><p>The stock crosses back above a flat or rising EMA and closes near the top of its monthly range.</p></div></Panel>
       <Panel title="B · Pullback reversal" hint="A low-volume pullback within an uptrend"><div className="setup amber"><ArrowUpRight size={25}/><p>The stock pulls back toward a rising EMA, then posts a strong reversal. Setup B ranks first when both setups are enabled.</p></div></Panel>
     </div>}
     <ChartPreview data={chart} ticker={ticker} setTicker={setTicker} load={loadChart} busy={busy}
-      shortlisted={report?.candidates.filter(row => row.Status === 'SIGNAL').map(row => row.Symbol) || []} signal={chart?.month === report?.month && !!report?.candidates.some(row => row.Symbol === chart.symbol && row.Status === 'SIGNAL')}/>
-    {report && <Panel title="Signal frequency" hint="Monthly signal counts, stacked by setup"><Plot rows={report.funnel} palette={SIGNAL_COLORS} bars/></Panel>}
-    <Panel title="Check exits" hint="Enter holdings to check their close and EMA on the selected signal month.">
+      shortlisted={picked} signal={chart?.month === report?.month && picked.includes(chart?.symbol)}/>
+    {report && <Panel title="Signal frequency" hint={weekly ? 'Weekly entries, stacked by entry type' : 'Monthly signal counts, stacked by setup'}><Plot rows={report.funnel} palette={weekly ? ENTRY_COLORS : SIGNAL_COLORS} bars/></Panel>}
+    <Panel title="Check exits" hint={weekly ? 'Enter holdings to check their weekly close against the 10W EMA. Stop-loss and target exits depend on your own entry price.' : 'Enter holdings to check their close and EMA on the selected signal month.'}>
       <div className="exit-form"><input aria-label="Holdings tickers" placeholder="RELIANCE, TCS, INFY" value={holdings} onChange={event => setHoldings(event.target.value)}/>
         <button className="secondary-button" type="button" disabled={busy || !holdings.trim()} onClick={scan}><ShieldCheck size={16}/>Check holdings</button></div>
       {!!report?.exits?.length && <Table rows={report.exits}/>}
@@ -192,17 +216,28 @@ const REPORT_TABS = {
   Allocation: ['allocation', 'Portfolio positions by month'],
   Funnel: ['funnel', 'Monthly signal funnel'],
 }
+const WEEKLY_TABS = {
+  Performance: ['metrics', 'Performance vs benchmarks'],
+  Weekly: ['monthly', 'Weekly portfolio'],
+  Annual: ['annual', 'Calendar-year returns'],
+  Trades: ['trades', 'Portfolio trades'],
+  'All signals': ['allSignals', 'Entries without slot limits'],
+  Allocation: ['allocation', 'Portfolio positions by week'],
+  Funnel: ['funnel', 'Weekly setup funnel'],
+}
 function Backtest({ report, download, exporting }) {
+  const weekly = report?.timeframe === 'weekly'
+  const tabs = weekly ? WEEKLY_TABS : REPORT_TABS
   const [section, setSection] = useState('Performance')
   const [chart, setChart] = useState('Growth')
   const metrics = Object.fromEntries((report?.metrics || []).map(row => [row.Metric,row.Strategy]))
   const chartKey = { Growth: 'growth', Drawdown: 'drawdown', Rolling: 'rolling' }[chart]
-  const [tableKey, title] = REPORT_TABS[section]
+  const [tableKey, title] = tabs[section] || tabs.Performance
   if (!report) return <Panel title="Backtest results" hint="Choose a first signal month and a final valuation month.">
     <div className="empty backtest-empty"><BarChart3 size={26}/> Run a backtest to compare the strategy against NSE benchmarks.</div>
   </Panel>
   return <>
-    <div className="section-header"><div><h2>Performance overview</h2><p>{monthLabel(report.first)} – {monthLabel(report.last)}</p></div>
+    <div className="section-header"><div><h2>Performance overview</h2><p>{weekly ? `Weekly · ${monthLabel(report.firstWeek)} – ${monthLabel(report.lastWeek)}` : `${monthLabel(report.first)} – ${monthLabel(report.last)}`}</p></div>
       <button type="button" className="secondary-button" disabled={exporting} onClick={download}><ArrowDownToLine size={16}/>{exporting ? 'Exporting…' : 'Export Excel'}</button>
     </div>
     <div className="metrics">
@@ -211,10 +246,10 @@ function Backtest({ report, download, exporting }) {
       <Card icon={Activity} label="Max drawdown" value={pct(metrics['Max drawdown'])} note="Peak-to-trough decline" tone="amber"/>
       <Card icon={Layers3} label="Portfolio trades" value={num(report.trades.length, 0)} note="Open and closed positions" tone="slate"/>
     </div>
-    <Panel title={{Growth:'Growth of ₹100',Drawdown:'Drawdown',Rolling:'Rolling 12-month return'}[chart]} hint="Month-end strategy and benchmark performance" action={<Tabs options={['Growth','Drawdown','Rolling']} value={chart} change={setChart}/>}>
+    <Panel title={{Growth:'Growth of ₹100',Drawdown:'Drawdown',Rolling: weekly ? 'Rolling 52-week return' : 'Rolling 12-month return'}[chart]} hint={weekly ? 'Week-end strategy and benchmark performance' : 'Month-end strategy and benchmark performance'} action={<Tabs options={['Growth','Drawdown','Rolling']} value={chart} change={setChart}/>}>
       <Plot rows={report[chartKey]} palette={BENCH_COLORS} tick={chart === 'Growth' ? rupee : pct}/>
     </Panel>
-    <div className="analysis"><div className="analysis-nav" aria-label="Backtest report">{Object.keys(REPORT_TABS).map(label =>
+    <div className="analysis"><div className="analysis-nav" aria-label="Backtest report">{Object.keys(tabs).map(label =>
       <button type="button" key={label} className={section === label ? 'active' : ''} aria-pressed={section === label} onClick={() => setSection(label)}>{label}</button>)}</div>
       <Panel title={title}><Table rows={report[tableKey]}/></Panel>
     </div>
@@ -225,8 +260,9 @@ function Backtest({ report, download, exporting }) {
 
 function App() {
   const [mode, setMode] = useState('screener')
+  const [timeframe, setTimeframe] = useState('monthly')
   const [config, setConfig] = useState({ indices: INDEXES, latest: '' })
-  const [draft, setDraft] = useState({ index: 'Nifty Total Market', signal: '', first: '2025-01', last: '', bench: 'TRI' })
+  const [draft, setDraft] = useState({ index: 'Nifty Total Market', signal: '', week: '', first: '2025-01', last: '', bench: 'TRI' })
   const [params, setParams] = useState(DEFAULTS)
   const [holdings, setHoldings] = useState('')
   const [settings, setSettings] = useState(false)
@@ -235,7 +271,9 @@ function App() {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const update = patch => setDraft(old => ({ ...old, ...patch }))
-  const report = results[mode]
+  const weekly = timeframe === 'weekly'
+  const resultKey = mode + '-' + timeframe
+  const report = results[resultKey]
   const onScreener = mode === 'screener'
   const onRules = mode === 'rules'
 
@@ -247,7 +285,7 @@ function App() {
     streamlitRequest('config').then(data => {
       setConfig(data)
       setParams(data.params)
-      update({ signal: data.latest, last: data.latest })
+      update({ signal: data.latest, week: data.latestWeek, last: data.latest })
     })
   }, [])
   useEffect(() => {
@@ -266,8 +304,8 @@ function App() {
     }
     setBusy(mode)
     try {
-      const result = await streamlitRequest('run', { ...draft, params, holdings, mode })
-      setResults(previous => ({ ...previous, [mode]: result }))
+      const result = await streamlitRequest('run', { ...draft, params, holdings, mode, timeframe })
+      setResults(previous => ({ ...previous, [resultKey]: result }))
       if (draft.refresh) update({ refresh: false })
     } catch (failure) {
       setError(failure.message)
@@ -279,7 +317,9 @@ function App() {
     setBusy('chart')
     setError('')
     try {
-      return await streamlitRequest('chart', { symbol, signal: signalMonth || draft.signal, emaSpan: emaSpan ?? params.ema_span })
+      return await streamlitRequest('chart', weekly
+        ? { symbol, signal: signalMonth || draft.week, emaSpan: emaSpan ?? params.w_ema, timeframe, week: signalMonth || draft.week }
+        : { symbol, signal: signalMonth || draft.signal, emaSpan: emaSpan ?? params.ema_span })
     } catch (failure) {
       setError(failure.message)
       return null
@@ -292,16 +332,17 @@ function App() {
     setError('')
     try {
       const body = kind === 'screener'
-        ? { kind, report: { candidates: report.candidates.filter(row => row.Status === 'SIGNAL') } }
+        ? { kind, report: { candidates: report.candidates.filter(row => row.Status !== 'Rejected') } }
         : { report }
       const { xlsx } = await streamlitRequest('export', body)
       const data = Uint8Array.from(atob(xlsx), character => character.charCodeAt(0))
       const url = URL.createObjectURL(new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
       const link = document.createElement('a')
       link.href = url
+      const label = report.timeframe === 'weekly' ? ' Weekly' : ''
       link.download = kind === 'screener'
-        ? `EMA Reclaim Lab Signals ${report.index} ${report.month}.xlsx`
-        : 'EMA Reclaim Lab Backtest.xlsx'
+        ? `EMA Reclaim Lab${label} Signals ${report.index} ${report.month}.xlsx`
+        : `EMA Reclaim Lab${label} Backtest.xlsx`
       link.click()
       window.setTimeout(() => URL.revokeObjectURL(url), 1000)
     } catch (failure) {
@@ -324,7 +365,7 @@ function App() {
       </nav>
       <div className="nav-label secondary">CONFIGURATION</div>
       <nav><button type="button" onClick={openSettings}><Settings2 size={19}/>Strategy settings</button></nav>
-      <div className="sidebar-foot"><div className="exchange-icon"><Activity size={17}/></div><div><strong>NSE equities</strong><small>Monthly signals</small></div></div>
+      <div className="sidebar-foot"><div className="exchange-icon"><Activity size={17}/></div><div><strong>NSE equities</strong><small>{weekly ? 'Weekly signals' : 'Monthly signals'}</small></div></div>
     </aside>
     <main>
       <header className="topbar"><div className="breadcrumb">
@@ -334,15 +375,21 @@ function App() {
       <div className="content">
         <section className="hero">
           <div className="hero-copy"><h1>{onScreener ? 'EMA signal screener' : onRules ? 'Rules & logic' : 'Strategy backtest'}</h1>
-            <p>{onScreener ? 'Find monthly EMA reclaims and pullback reversals across NSE equities.' : onRules ? 'How the screener and backtest decide, with your current settings.' : 'Measure how monthly signals translate into a slot-based portfolio.'}</p>
+            <p>{onRules ? 'How the screener and backtest decide, with your current settings.' : weekly
+              ? (onScreener ? 'Find weekly pullbacks to a rising 10-week EMA across NSE equities.' : 'Measure how weekly pullback entries, with a fixed target and stop, translate into a slot-based portfolio.')
+              : (onScreener ? 'Find monthly EMA reclaims and pullback reversals across NSE equities.' : 'Measure how monthly signals translate into a slot-based portfolio.')}</p>
           </div>
           <div className="hero-mark" aria-hidden="true"><ChartNoAxesCombined size={144} strokeWidth={.75}/></div>
-          <div className="hero-badge"><CalendarDays size={16}/><span>Latest completed month<strong>{monthLabel(config.latest)}</strong></span></div>
+          <div className="hero-badge"><CalendarDays size={16}/><span>{weekly && !onRules ? 'Latest completed week' : 'Latest completed month'}<strong>{monthLabel(weekly && !onRules ? config.latestWeek : config.latest)}</strong></span></div>
         </section>
         {!onRules && <form className="controls ema-controls" onSubmit={submit}>
           <Field label="Stock universe"><Select value={draft.index} change={index => update({index})}>{config.indices.map(index => <option key={index}>{index}</option>)}</Select></Field>
-          <Field label="Buy setup"><Select value={params.setups} change={setups => setParams(old => ({...old,setups}))}><option value="B">B · Pullback reversal</option><option value="A">A · EMA reclaim</option><option value="A+B">Both setups</option></Select></Field>
-          {onScreener ? <Field label="Signal month"><input type="month" required value={draft.signal} onChange={event => update({signal:event.target.value})}/></Field> : <>
+          <Field label="Timeframe"><Select value={timeframe} change={setTimeframe}><option value="monthly">Monthly · 12M EMA</option><option value="weekly">Weekly · 10W EMA</option></Select></Field>
+          {weekly ? <Field label="Buy setup"><Select value="B" change={() => {}}><option value="B">B · Pullback to 10W EMA</option></Select></Field>
+            : <Field label="Buy setup"><Select value={params.setups} change={setups => setParams(old => ({...old,setups}))}><option value="B">B · Pullback reversal</option><option value="A">A · EMA reclaim</option><option value="A+B">Both setups</option></Select></Field>}
+          {onScreener ? weekly
+            ? <Field label="Signal week (any day in it)"><input type="date" required value={draft.week} onChange={event => update({week:event.target.value})}/></Field>
+            : <Field label="Signal month"><input type="month" required value={draft.signal} onChange={event => update({signal:event.target.value})}/></Field> : <>
             <Field label="First signal month"><input type="month" required value={draft.first} onChange={event => update({first:event.target.value})}/></Field>
             <Field label="Final valuation month"><input type="month" required value={draft.last} max={config.latest} onChange={event => update({last:event.target.value})}/></Field>
           </>}
@@ -356,9 +403,9 @@ function App() {
         {onRules
           ? <Rules params={params} defaults={config.params} indices={config.indices} bench={draft.bench}/>
           : onScreener
-          ? <Screener report={report} holdings={holdings} setHoldings={setHoldings} busy={busy} scan={() => submit()} requestChart={requestChart}
+          ? <Screener report={report} weekly={weekly} holdings={holdings} setHoldings={setHoldings} busy={busy} scan={() => submit()} requestChart={requestChart}
               download={() => download('screener')} exporting={busy === 'export'}/>
-          : <Backtest report={report} download={() => download('backtest')} exporting={busy === 'export'}/>}
+          : <Backtest key={resultKey} report={report} download={() => download('backtest')} exporting={busy === 'export'}/>}
         <footer><span>EMA Reclaim Lab</span><span>Signals and portfolio research</span></footer>
       </div>
     </main>
