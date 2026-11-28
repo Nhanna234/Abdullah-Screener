@@ -143,7 +143,7 @@ function Settings({ close, params, setParams, draft, update }) {
   </aside></div>
 }
 
-const WEEKLY_COLUMNS = ['Rank','Symbol','Company','Status','Action','Trigger','Stop-loss','Target','Entry date','Close vs EMA','Low vs EMA','Closing range','Reason']
+const WEEKLY_COLUMNS = ['Rank','Symbol','Company','Monthly signal','Status','Action','Trigger','Stop-loss','Target','Entry date','Close vs EMA','Low vs EMA','Closing range','Reason']
 function Screener({ report, weekly, holdings, setHoldings, busy, scan, requestChart, download, exporting }) {
   const [view, setView] = useState('Signals')
   const [ticker, setTicker] = useState('RELIANCE')
@@ -170,7 +170,7 @@ function Screener({ report, weekly, holdings, setHoldings, busy, scan, requestCh
   return <>
     <div className="section-header"><div><h2>Signal overview</h2><p>{report ? (weekly ? 'Week ending ' : '') + monthLabel(report.month) + (report.provisional ? ' · Provisional' : '') : 'Run the screener to see qualifying stocks'}</p></div></div>
     {weekly ? <div className="metrics">
-      <Card icon={Layers3} label="Setups" value={num(counts['Setups (all pre-week rules)'], 0)} note="Every pre-week rule passed"/>
+      <Card icon={Layers3} label="Setups" value={num(counts['Setups (all pre-week rules)'], 0)} note={report ? `Of ${num(counts['On monthly list'], 0)} stocks on the monthly A/B list` : 'Scans only the monthly A/B list'}/>
       <Card icon={ScanSearch} label="Triggered" value={num(counts.TRIGGERED, 0)} note="Entries during the week"/>
       <Card icon={ArrowUpRight} label="Ready" value={report ? num(counts['BUY NEXT OPEN'] + counts['BUY STOP'], 0) : '—'} note="Buy at next open or above the week’s high" tone="amber"/>
       <Card icon={Activity} label="Watch list" value={num(counts.WATCH, 0)} note="Needs a touch of the 10W EMA" tone="slate"/>
@@ -190,7 +190,7 @@ function Screener({ report, weekly, holdings, setHoldings, busy, scan, requestCh
         <Table rows={rows} columns={weekly ? WEEKLY_COLUMNS : ['Rank','Symbol','Company','Status','Setup','Month return','Closing range','Close/EMA','Reason']} pick={loadChart}/>
       </Panel>
     </> : weekly ? <div className="two-panels">
-      <Panel title="Weekly setup" hint="A pullback to a rising 10-week EMA"><div className="setup"><ArrowUpRight size={25}/><p>A stock 1–4 weeks off its 52-week closing high, closing above a rising 10W EMA, dips to the EMA this week.</p></div></Panel>
+      <Panel title="Weekly setup" hint="A pullback to a rising 10-week EMA"><div className="setup"><ArrowUpRight size={25}/><p>Only stocks on the monthly list (a monthly Setup A or B signal, not yet exited) are scanned. A stock 1–4 weeks off its 52-week closing high, closing above a rising 10W EMA, dips to the EMA this week.</p></div></Panel>
       <Panel title="Entry and exit" hint="Fixed target and stop from the entry price"><div className="setup amber"><Activity size={25}/><p>Buy on a break of last week’s high or on a strong weekly close. Exit at the target, the stop-loss, or a weekly close below the 10W EMA.</p></div></Panel>
     </div> : <div className="two-panels">
       <Panel title="A · EMA reclaim" hint="From below the average to a strong close"><div className="setup"><Activity size={25}/><p>The stock crosses back above a flat or rising EMA and closes near the top of its monthly range.</p></div></Panel>

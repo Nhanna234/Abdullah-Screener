@@ -18,7 +18,9 @@ Streamlit app that screens NSE indices for the monthly **EMA-reclaim breakout** 
 **Exit:** close below EMA or Close/EMA > 1.7.
 **Portfolio:** 10 slots, unfilled slots stay in cash, new signals ignored when full.
 
-**Weekly timeframe (Setup B on weekly candles, Timeframe box):** 52-week closing high made 2–5 weeks before
+**Weekly timeframe (Setup B on weekly candles, Timeframe box):** scans only stocks on the monthly list
+(joined on a monthly Setup A or B signal, left on the monthly exit; each week uses the list from the last
+completed month-end) · 52-week closing high made 2–5 weeks before
 the touch week · every close since at/above the 10-week EMA · 10W EMA up ≥ 2% over 6 weeks · the touch
 week's low dips to within −5%…+3% of last week's 10W EMA. Entry on the first of: a break of last week's high
 after the touch · a touch-week close above the EMA with closing range ≥ 0.60 (next open) · a break of the

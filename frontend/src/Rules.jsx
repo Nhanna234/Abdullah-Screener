@@ -8,7 +8,7 @@
 import React from 'react'
 import { BookOpenText, CircleHelp } from 'lucide-react'
 
-const LOGIC_REVIEWED = '27 Nov 2026'
+const LOGIC_REVIEWED = '28 Nov 2026'
 
 const pct = v => v == null ? 'off' : `${+(v * 100).toFixed(2)}%`
 const signedPct = v => v == null ? 'off' : `${v > 0 ? '+' : v < 0 ? '−' : ''}${+(Math.abs(v) * 100).toFixed(2)}%`
@@ -244,6 +244,22 @@ export default function Rules({ params, defaults, indices, bench }) {
 
 
     <Section id="rules-weekly" title="12. Weekly timeframe · Pullback to the 10W EMA">
+      <h3>Which stocks are scanned: the monthly list</h3>
+      <ul>
+        <li>The weekly timeframe does not scan the whole index. It scans only stocks of the selected universe that are on the
+          <strong> monthly list</strong>.</li>
+        <li><strong>Joining:</strong> a month-end where the stock gives a monthly signal under Setup A (Rising or Flat) or
+          Setup B, using the monthly rules and settings in sections 4–7. Both setups count, whatever the Buy setup box
+          says for the monthly timeframe.</li>
+        <li><strong>Leaving:</strong> a later month-end where the monthly exit fires: a close below the{' '}
+          <V k="ema_span"/>-month EMA, or Close ÷ EMA above {ext}. A new monthly signal adds it back.</li>
+        <li><strong>No peeking ahead:</strong> each week uses the list as of the last month-end completed before the week
+          started. A week starting Monday 27 Oct uses September’s list; a week starting Monday 3 Nov uses October’s.</li>
+        <li>Leaving the list only stops new entries. Positions already bought keep their weekly target, stop-loss and EMA
+          exits.</li>
+        <li>The <strong>Monthly signal</strong> column shows the setup and month of the signal that put the stock on the list.
+          The funnel’s first row counts the stocks on the list each week.</li>
+      </ul>
       <h3>Weekly candles</h3>
       <ul>
         <li>Built from the same cleaned daily prices. Weeks end on Friday: open = first day’s open, high = highest high,
@@ -336,7 +352,7 @@ export default function Rules({ params, defaults, indices, bench }) {
           next week.</li>
         <li><strong>WATCH:</strong> every setup rule passes for next week. Wait for a low inside the zone shown (based on this
           week’s EMA), then buy above this week’s high.</li>
-        <li><strong>Rejected</strong> (All candidates only): came into the week above the EMA, touched the zone, and had a
+        <li><strong>Rejected</strong> (All candidates only): on the monthly list, came into the week above the EMA, touched the zone, and had a
           52-week high within the last {W_KMAX_LIMIT + 1} weeks, but failed a rule. The Reason column lists every failure.</li>
         <li>Rows are ranked by status, then by close ÷ 52-week low. Each stock appears once. <strong>Export Excel</strong>{' '}
           downloads every row that is not Rejected.</li>

@@ -2,6 +2,10 @@
 Weekly Setup B - pullback to the 10-week EMA, with a fixed target and stop-loss.
 Pure pandas/numpy. Weekly candles are built from daily prices (weeks end on Friday).
 
+SCAN LIST: only stocks on the monthly list are scanned. A stock joins the list at a month-end
+            where it gives a monthly Setup A or B signal (both setups, monthly settings) and leaves
+            at a month-end where the monthly exit fires (close < 12M EMA or Close/EMA > exit_ext).
+            A week uses the list as of the last month-end before the week started.
 SETUP (known when the touch week w opens - every value below uses weeks up to w-1)
   W1. Recent high : the highest close of the 52 weeks before w was made in week w-k-1,
                     1 <= k <= w_kmax (k = pullback weeks before the touch week)
@@ -60,6 +64,44 @@ def history_weeks(P: dict) -> int:
 def week_label(period) -> str:
     """A weekly period shown as its Friday date."""
     return str(period.end_time.date())
+
+
+# ════════════════════════════════════════════════════════════ monthly scan list
+def monthly_list(daily: dict, P: dict, last_final_day=None) -> dict:
+    """Which stocks are on the monthly list after each completed month-end, and why."""
+    mp = {key: P[key] for key in E.DEFAULTS}
+    mp["setups"] = "A+B"
+    m = E.to_monthly(daily, last_final_day)
+    ind = E.compute_indicators(m, mp)
+    sig, tier, _ = E.compute_signals(ind, mp)
+    months = ind["C"].index
+    n = len(months) - 1 if m["partial"] else len(months)        # completed months only
+    C, Em = ind["C"].values, ind["E"].values
+    with np.errstate(invalid="ignore", divide="ignore"):
+        exit_ = (C < Em) | ((C / Em > mp["exit_ext"]) if mp["exit_ext"] else False)
+    sig_v, tier_v = sig.values, tier.values
+    on = np.zeros((n, C.shape[1]), bool)
+    since = np.full((n, C.shape[1]), -1)
+    cur, src = np.zeros(C.shape[1], bool), np.full(C.shape[1], -1)
+    for t in range(n):
+        cur = sig_v[t] | (cur & ~exit_[t])
+        src = np.where(sig_v[t], t, np.where(cur, src, -1))
+        on[t], since[t] = cur, src
+    return {"months": months[:n], "on": on, "since": since, "tier": tier_v[:n], "syms": list(ind["C"].columns)}
+
+
+def week_list_month(week, months) -> int:
+    """Index of the last completed month-end before the week opened (-1 if none)."""
+    month = (week.start_time + pd.Timedelta(days=2)).to_period("M") - 1     # Monday's month - 1
+    return int(min(months.searchsorted(month, "right") - 1, len(months) - 1))
+
+
+def list_label(ml: dict, mi: int, j: int) -> str:
+    t = ml["since"][mi, j] if mi >= 0 else -1
+    if t < 0:
+        return ""
+    month = ml["months"][t].strftime("%b %Y")
+    return f"{E.TIER[ml['tier'][t, j]]} · {month}"
 
 
 # ════════════════════════════════════════════════════════════ weekly data
@@ -122,8 +164,9 @@ def compute_indicators(w: dict, P: dict) -> dict:
 
 def setup_rules(ind: dict, P: dict) -> dict:
     """Boolean frames for the pre-week setup rules, cumulative (shared by signals and funnel)."""
-    r = {"eligible": (ind["hist"] >= history_weeks(P)) & (ind["turn"] >= P["min_turnover_cr"] * 1e7)
-         & ind["prev_close"].notna() & ind["prev_ema"].notna()}
+    r = {"listed": ind["listed"]}
+    r["eligible"] = r["listed"] & (ind["hist"] >= history_weeks(P)) & (ind["turn"] >= P["min_turnover_cr"] * 1e7) \
+        & ind["prev_close"].notna() & ind["prev_ema"].notna()
     k = ind["k"]
     r["struct"] = r["eligible"] & (k >= 1) & (k <= P["w_kmax"]) & ind["above"]
     r["rising"] = r["struct"] & (ind["slope"] >= P["w_min_slope"])
@@ -266,6 +309,15 @@ def prepare(daily: dict, P: dict, last_final_day=None) -> dict:
     w = to_weekly(daily, last_final_day)
     ind = compute_indicators(w, P)
     ind["partial"] = w["partial"]
+    ml = monthly_list(daily, P, last_final_day)
+    cols = list(ind["C"].columns)
+    pos = [ml["syms"].index(s) for s in cols]
+    week_month = np.array([week_list_month(wk, ml["months"]) for wk in ind["all_weeks"]])
+    listed = np.zeros((len(week_month), len(cols)), bool)
+    ok = week_month >= 0
+    listed[ok] = ml["on"][week_month[ok]][:, pos]
+    ind["listed"] = pd.DataFrame(listed, ind["all_weeks"], cols)
+    ind["week_month"], ind["mlist"] = week_month, {**ml, "pos": pos}
     dp = daily_panel(w, ind)
     cands, setups, rules = find_entries(ind, P, dp)
     return {"w": w, "ind": ind, "dp": dp, "cands": cands, "setups": setups, "rules": rules}
@@ -319,9 +371,15 @@ def trade_exit(dp: dict, j: int, c: dict, P: dict, last_idx: int):
     return None, C[lv, j], EMA_EXIT + " (exit pending)" if pending else "Open"
 
 
+def monthly_label(ind: dict, wi: int, j: int) -> str:
+    ml = ind["mlist"]
+    return list_label(ml, ind["week_month"][wi], ml["pos"][j])
+
+
 def _info(c, dp, ind, P, names, inds):
     s = dp["syms"][c["j"]]
     return {"Symbol": s, "Company": names.get(s, ""), "Industry": inds.get(s, ""),
+            "Monthly signal": monthly_label(ind, c["week"], c["j"]),
             "Touch week": week_label(ind["all_weeks"][c["week"]]),
             "Entry type": ENTRY_TYPES[c["type"]], "Entry date": str(dp["days"][c["day"]].date()),
             "Entry price": c["price"], "Stop-loss": c["price"] * (1 - P["w_stop"]),
@@ -439,6 +497,7 @@ def funnel(W: dict) -> pd.DataFrame:
     for c in W["cands"]:
         by_type[c["type"]][dp["day_w"][c["day"]]] += 1
     f = pd.DataFrame({
+        "On monthly list": r["listed"].sum(axis=1).values[:n],
         "Eligible": r["eligible"].sum(axis=1).values[:n],
         "52W high 2+ weeks back, closes above EMA": r["struct"].sum(axis=1).values[:n],
         "+ EMA rising": r["rising"].sum(axis=1).values[:n],
@@ -490,7 +549,7 @@ def screen_week(W: dict, P: dict, wi: int, names: dict, inds: dict) -> pd.DataFr
         sc = ind["score"].iat[wk, j]
         turn = ind["turn"].iat[wk, j]
         return {"Symbol": syms[j], "Company": names.get(syms[j], ""), "Industry": inds.get(syms[j], ""),
-                "Close": ind["C"].iat[wi, j], "10W EMA": ind["E"].iat[wi, j],
+                "Monthly signal": monthly_label(ind, wk, j), "Close": ind["C"].iat[wi, j], "10W EMA": ind["E"].iat[wi, j],
                 "Close vs EMA": ind["close_vs_ema"].iat[wi, j],
                 "Pullback weeks": ind["k"].iat[wk, j], "EMA slope": ind["slope"].iat[wk, j],
                 "Above 52W low": sc - 1, "Turnover (Rs cr)": turn / 1e7 if pd.notna(turn) else np.nan,
@@ -536,7 +595,7 @@ def screen_week(W: dict, P: dict, wi: int, names: dict, inds: dict) -> pd.DataFr
     # 4. near-misses: came into the week above the EMA, touched the zone, failed a rule
     lve = ind["low_vs_ema"].values[wi]
     prev_ok = (ind["prev_close"].values[wi] >= ind["prev_ema"].values[wi])
-    near = prev_ok & (lve <= P["w_low_hi"]) & ind["k"].notna().values[wi]
+    near = ind["listed"].values[wi] & prev_ok & (lve <= P["w_low_hi"]) & ind["k"].notna().values[wi]
     for j in np.nonzero(near)[0]:
         if j in done:
             continue
@@ -568,7 +627,7 @@ def screen_week(W: dict, P: dict, wi: int, names: dict, inds: dict) -> pd.DataFr
         rows.append({**common(j, wi), "Status": "Rejected", "Action": None,
                      "Trigger": np.nan, "Stop-loss": np.nan, "Target": np.nan, "Entry date": None,
                      "Low vs EMA": lve[j], "Closing range": ind["cr"].iat[wi, j], "Reason": "; ".join(why)})
-    cols = ["Symbol", "Company", "Industry", "Status", "Action", "Trigger", "Stop-loss", "Target",
+    cols = ["Symbol", "Company", "Industry", "Monthly signal", "Status", "Action", "Trigger", "Stop-loss", "Target",
             "Entry date", "Close", "10W EMA", "Close vs EMA", "Low vs EMA", "Closing range",
             "Pullback weeks", "EMA slope", "Above 52W low", "Turnover (Rs cr)", "Reason"]
     df = pd.DataFrame(rows)
