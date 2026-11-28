@@ -189,7 +189,9 @@ export default function Rules({ params, defaults, indices, bench }) {
           is below the EMA; “Exit · Extension limit” if close ÷ EMA is above {ext}; otherwise “Hold”.</li>
         <li><strong>Chart:</strong> opens the top row of the screen (RELIANCE if the screen is empty). Daily (last 2,000
           sessions), weekly (last 520 weeks) and monthly candles with the EMA at the current span; the monthly view also
-          shows the 12-month low.</li>
+          shows the 12-month low. Up candles are hollow black, down candles solid red. Scroll to zoom, drag to pan,
+          drag an axis to stretch it, and switch on a log price scale; the Measure tool shows the price change, % change
+          and candle count between two points. The chart is for viewing only and does not change any rule.</li>
       </ul>
     </Section>
 
