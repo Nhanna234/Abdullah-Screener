@@ -20,12 +20,12 @@ const DEFAULTS = {
   execution: 'next_open', capital: 1000000, setups: 'B', b_kmax: 4, b_low_lo: -.1,
   b_low_hi: .05, b_min_ret: .05, b_min_cr: .6, b_use_vol_dry: true,
   b_vol_dry: .8, b_use_vol_exp: false,
-  w_ema: 10, w_slope_window: 6, w_min_slope: .02, w_kmax: 4, w_low_lo: -.05, w_low_hi: .03,
-  w_target: .2, w_stop: .075, w_use_vol_dry: false, w_vol_dry: .8,
+  w_ema: 10, w_slope_window: 6, w_min_slope: .02, w_range_weeks: 26, w_range: 1.3, w_low_lo: -.05, w_low_hi: .03,
+  w_near_weeks: 3, w_min_ret: .04, w_min_cr: .75, w_cr_close: .9, w_target: .2, w_stop: .075,
 }
 const BENCH_COLORS = { Strategy: '#107457', 'Nifty 50': '#849991', 'Nifty 500': '#bf8b3e', 'Equal-weight universe': '#7587b7' }
 const SIGNAL_COLORS = { 'B · Pullback': '#107457', 'A · Rising': '#b28549', 'A · Flat': '#7587b7' }
-const ENTRY_COLORS = { 'Prev-week high break': '#107457', 'Strong close': '#b28549', 'Touch-week high break': '#7587b7' }
+const ENTRY_COLORS = { 'Buy above signal high': '#107457', 'Buy at signal close': '#b28549' }
 const num = (value, digits = 2) => Number.isFinite(value) ? value.toLocaleString('en-IN', { maximumFractionDigits: digits }) : '—'
 const pct = value => Number.isFinite(value) ? (value * 100).toFixed(1) + '%' : '—'
 const rupee = value => Number.isFinite(value) ? '₹' + num(value, 0) : '—'
@@ -110,7 +110,7 @@ function Settings({ close, params, setParams, draft, update }) {
     <label className="check"><input type="checkbox" checked={!!draft.refresh} onChange={event => update({ refresh: event.target.checked })}/>Refresh prices on next run</label>
     <h3>Shared rules</h3><div className="setting-grid">
       {number('ema_span','EMA span (months)',3,36)}{number('slope_window','Slope window (months)',2,12)}
-      {number('flat_band','Flat EMA band (%)',0,20,.5,100)}{number('min_dist_low','Min. above 12-month / 52-week low (%)',0,500,5,100)}
+      {number('flat_band','Flat EMA band (%)',0,20,.5,100)}{number('min_dist_low','Min. above 12-month low (%)',0,500,5,100)}
       {number('min_history','Min. history (months)',12,120)}{number('min_turnover_cr','Min. daily turnover (₹ crore)',0,100,.5)}
       <label className="check"><input type="checkbox" checked={params.exit_ext != null} onChange={event => put('exit_ext',event.target.checked ? 1.7 : null)}/>Use extension limit</label>
       {number('exit_ext','Extension limit (× EMA)',1.1,5,.05,1,1.7)}
@@ -124,14 +124,16 @@ function Settings({ close, params, setParams, draft, update }) {
       {number('b_low_hi','Low vs EMA, max. (%)',0,50,1,100)}{number('b_vol_dry','Max. pullback volume ratio',.1,2,.05)}
       {toggle('b_use_vol_dry','Require lower pullback volume')}{toggle('b_use_vol_exp','Require reversal volume expansion')}
     </div>
-    <h3>Weekly · Pullback to the 10W EMA</h3>
-    <p className="drawer-note">Also uses B’s min. closing range and the shared, portfolio and execution settings.</p>
+    <h3>Weekly · Reversal from the 10W EMA</h3>
+    <p className="drawer-note">Also uses the shared history and turnover settings, the monthly rules (for the scan list) and the portfolio settings.</p>
     <div className="setting-grid">
       {number('w_ema','EMA span (weeks)',3,36)}{number('w_slope_window','Slope window (weeks)',2,26)}
-      {number('w_min_slope','Min. EMA slope (%)',0,50,.5,100)}{number('w_kmax','Max. pullback weeks',1,8)}
+      {number('w_min_slope','Min. EMA slope (%)',0,50,.5,100)}{number('w_range_weeks','High/low window (weeks)',4,104)}
+      {number('w_range','Min. high ÷ low (×)',1,5,.05)}{number('w_near_weeks','Weeks checked for EMA touch',1,8)}
       {number('w_low_lo','Low vs EMA, min. (%)',-30,0,.5,100)}{number('w_low_hi','Low vs EMA, max. (%)',0,30,.5,100)}
-      {number('w_target','Target (%)',1,200,.5,100)}{number('w_stop','Stop-loss (%)',.5,50,.5,100)}
-      {number('w_vol_dry','Max. pullback volume ratio',.1,2,.05)}{toggle('w_use_vol_dry','Require lower pullback volume')}
+      {number('w_min_ret','Min. week return (%)',0,50,.5,100)}{number('w_min_cr','Min. closing range',0,1,.05)}
+      {number('w_cr_close','Buy at close above closing range',0,1,.05)}{number('w_target','Target (%)',1,200,.5,100)}
+      {number('w_stop','Stop-loss (%)',.5,50,.5,100)}
     </div>
     <h3>Portfolio & benchmarks</h3><div className="setting-grid">
       {number('slots','Portfolio slots',1,50)}{number('capital','Starting capital (₹)',10000,1e9,100000)}
@@ -143,7 +145,7 @@ function Settings({ close, params, setParams, draft, update }) {
   </aside></div>
 }
 
-const WEEKLY_COLUMNS = ['Rank','Symbol','Company','Monthly signal','Status','Action','Trigger','Stop-loss','Target','Entry date','Close vs EMA','Low vs EMA','Closing range','Reason']
+const WEEKLY_COLUMNS = ['Rank','Symbol','Company','Monthly signal','Status','Action','Trigger','Stop-loss','Target','Entry date','Week return','Closing range','Close vs EMA','Low vs EMA','26W high/low','Reason']
 function Screener({ report, weekly, holdings, setHoldings, busy, scan, requestChart, download, exporting }) {
   const [view, setView] = useState('Signals')
   const [ticker, setTicker] = useState('RELIANCE')
@@ -170,10 +172,10 @@ function Screener({ report, weekly, holdings, setHoldings, busy, scan, requestCh
   return <>
     <div className="section-header"><div><h2>Signal overview</h2><p>{report ? (weekly ? 'Week ending ' : '') + monthLabel(report.month) + (report.provisional ? ' · Provisional' : '') : 'Run the screener to see qualifying stocks'}</p></div></div>
     {weekly ? <div className="metrics">
-      <Card icon={Layers3} label="Setups" value={num(counts['Setups (all pre-week rules)'], 0)} note={report ? `Of ${num(counts['On monthly list'], 0)} stocks on the monthly A/B list` : 'Scans only the monthly A/B list'}/>
+      <Card icon={Layers3} label="Reversal signals" value={num(counts['Reversal signals'], 0)} note={report ? `Of ${num(counts['On monthly list'], 0)} stocks on the monthly A/B list` : 'Scans only the monthly A/B list'}/>
       <Card icon={ScanSearch} label="Triggered" value={num(counts.TRIGGERED, 0)} note="Entries during the week"/>
-      <Card icon={ArrowUpRight} label="Ready" value={report ? num(counts['BUY NEXT OPEN'] + counts['BUY STOP'], 0) : '—'} note="Buy at next open or above the week’s high" tone="amber"/>
-      <Card icon={Activity} label="Watch list" value={num(counts.WATCH, 0)} note="Needs a touch of the 10W EMA" tone="slate"/>
+      <Card icon={ArrowUpRight} label="Buy stops" value={num(counts['BUY STOP'], 0)} note="Buy above the signal week’s high next week" tone="amber"/>
+      <Card icon={Activity} label="Watch list" value={num(counts.WATCH, 0)} note="Near the 10W EMA, needs a reversal week" tone="slate"/>
     </div> : <div className="metrics">
       <Card icon={Layers3} label="Eligible stocks" value={num(counts.Eligible, 0)} note="History and turnover filters"/>
       <Card icon={ScanSearch} label="Buy signals" value={num(counts.Signals, 0)} note="Passed every active rule"/>
@@ -190,8 +192,8 @@ function Screener({ report, weekly, holdings, setHoldings, busy, scan, requestCh
         <Table rows={rows} columns={weekly ? WEEKLY_COLUMNS : ['Rank','Symbol','Company','Status','Setup','Month return','Closing range','Close/EMA','Reason']} pick={loadChart}/>
       </Panel>
     </> : weekly ? <div className="two-panels">
-      <Panel title="Weekly setup" hint="A pullback to a rising 10-week EMA"><div className="setup"><ArrowUpRight size={25}/><p>Only stocks on the monthly list (a monthly Setup A or B signal, not yet exited) are scanned. A stock 1–4 weeks off its 52-week closing high, closing above a rising 10W EMA, dips to the EMA this week.</p></div></Panel>
-      <Panel title="Entry and exit" hint="Fixed target and stop from the entry price"><div className="setup amber"><Activity size={25}/><p>Buy on a break of last week’s high or on a strong weekly close. Exit at the target, the stop-loss, or a weekly close below the 10W EMA.</p></div></Panel>
+      <Panel title="Weekly setup" hint="A reversal candle from a rising 10-week EMA"><div className="setup"><ArrowUpRight size={25}/><p>Only stocks on the monthly list (a monthly Setup A or B signal, not yet exited) are scanned. The stock has risen 30%+ from its 26-week low, consolidates near a rising 10W EMA, then posts a strong weekly reversal candle.</p></div></Panel>
+      <Panel title="Entry and exit" hint="Fixed target and stop from the entry price"><div className="setup amber"><Activity size={25}/><p>Closing range above 90%: buy at the week’s close. Otherwise buy above the signal week’s high next week. Exit at the target, the stop-loss, or a weekly close below the 10W EMA.</p></div></Panel>
     </div> : <div className="two-panels">
       <Panel title="A · EMA reclaim" hint="From below the average to a strong close"><div className="setup"><Activity size={25}/><p>The stock crosses back above a flat or rising EMA and closes near the top of its monthly range.</p></div></Panel>
       <Panel title="B · Pullback reversal" hint="A low-volume pullback within an uptrend"><div className="setup amber"><ArrowUpRight size={25}/><p>The stock pulls back toward a rising EMA, then posts a strong reversal. Setup B ranks first when both setups are enabled.</p></div></Panel>
@@ -223,7 +225,7 @@ const WEEKLY_TABS = {
   Trades: ['trades', 'Portfolio trades'],
   'All signals': ['allSignals', 'Entries without slot limits'],
   Allocation: ['allocation', 'Portfolio positions by week'],
-  Funnel: ['funnel', 'Weekly setup funnel'],
+  Funnel: ['funnel', 'Weekly signal funnel'],
 }
 function Backtest({ report, download, exporting }) {
   const weekly = report?.timeframe === 'weekly'
@@ -376,7 +378,7 @@ function App() {
         <section className="hero">
           <div className="hero-copy"><h1>{onScreener ? 'EMA signal screener' : onRules ? 'Rules & logic' : 'Strategy backtest'}</h1>
             <p>{onRules ? 'How the screener and backtest decide, with your current settings.' : weekly
-              ? (onScreener ? 'Find weekly pullbacks to a rising 10-week EMA across NSE equities.' : 'Measure how weekly pullback entries, with a fixed target and stop, translate into a slot-based portfolio.')
+              ? (onScreener ? 'Find weekly reversal candles from a rising 10-week EMA among monthly signal stocks.' : 'Measure how weekly reversal entries, with a fixed target and stop, translate into a slot-based portfolio.')
               : (onScreener ? 'Find monthly EMA reclaims and pullback reversals across NSE equities.' : 'Measure how monthly signals translate into a slot-based portfolio.')}</p>
           </div>
           <div className="hero-mark" aria-hidden="true"><ChartNoAxesCombined size={144} strokeWidth={.75}/></div>
@@ -385,7 +387,7 @@ function App() {
         {!onRules && <form className="controls ema-controls" onSubmit={submit}>
           <Field label="Stock universe"><Select value={draft.index} change={index => update({index})}>{config.indices.map(index => <option key={index}>{index}</option>)}</Select></Field>
           <Field label="Timeframe"><Select value={timeframe} change={setTimeframe}><option value="monthly">Monthly · 12M EMA</option><option value="weekly">Weekly · 10W EMA</option></Select></Field>
-          {weekly ? <Field label="Buy setup"><Select value="B" change={() => {}}><option value="B">B · Pullback to 10W EMA</option></Select></Field>
+          {weekly ? <Field label="Buy setup"><Select value="B" change={() => {}}><option value="B">Reversal from 10W EMA</option></Select></Field>
             : <Field label="Buy setup"><Select value={params.setups} change={setups => setParams(old => ({...old,setups}))}><option value="B">B · Pullback reversal</option><option value="A">A · EMA reclaim</option><option value="A+B">Both setups</option></Select></Field>}
           {onScreener ? weekly
             ? <Field label="Signal week (any day in it)"><input type="date" required value={draft.week} onChange={event => update({week:event.target.value})}/></Field>

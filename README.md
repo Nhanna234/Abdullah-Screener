@@ -18,14 +18,13 @@ Streamlit app that screens NSE indices for the monthly **EMA-reclaim breakout** 
 **Exit:** close below EMA or Close/EMA > 1.7.
 **Portfolio:** 10 slots, unfilled slots stay in cash, new signals ignored when full.
 
-**Weekly timeframe (Setup B on weekly candles, Timeframe box):** scans only stocks on the monthly list
+**Weekly timeframe (reversal from the 10-week EMA, Timeframe box):** scans only stocks on the monthly list
 (joined on a monthly Setup A or B signal, left on the monthly exit; each week uses the list from the last
-completed month-end) · 52-week closing high made 2–5 weeks before
-the touch week · every close since at/above the 10-week EMA · 10W EMA up ≥ 2% over 6 weeks · the touch
-week's low dips to within −5%…+3% of last week's 10W EMA. Entry on the first of: a break of last week's high
-after the touch · a touch-week close above the EMA with closing range ≥ 0.60 (next open) · a break of the
-touch week's high the following week. Exit at +20% target, −7.5% stop (from the entry price, checked daily)
-or a weekly close below the 10W EMA. Full rules are on the dashboard's Rules page.
+completed month-end) · 26-week high ÷ 26-week low ≥ 1.3 with the low first · 10W EMA up ≥ 2% over 6 weeks ·
+a weekly low within −5%…+3% of the 10W EMA in the signal week or the 2 weeks before · signal week closes above
+the 10W EMA with return > 4% and closing range > 0.75. Entry: closing range > 0.90 buys at the signal close,
+otherwise above the signal week's high the following week. Exit at +20% target, −7.5% stop (from the entry
+price, checked daily) or a weekly close below the 10W EMA. Full rules are on the dashboard's Rules page.
 
 Indices: Nifty 50, 100, 200, LargeMidcap 250, Smallcap 100, Smallcap 250, 500, Microcap 250, Total Market.
 
@@ -38,7 +37,7 @@ Indices: Nifty 50, 100, 200, LargeMidcap 250, Smallcap 100, Smallcap 250, 500, M
 | `frontend/` | React and Vite source plus the compiled dashboard in `dist/` |
 | `streamlit_legacy.py` | Original Streamlit interface |
 | `engine.py` | Signals, screener, portfolio simulation, analytics (pure pandas, no Streamlit) |
-| `engine_weekly.py` | Weekly Setup B: 10W EMA setups, entry triggers, target/stop exits, daily simulation |
+| `engine_weekly.py` | Weekly reversal from the 10W EMA: monthly scan list, signals, entries, target/stop exits, daily simulation |
 | `data.py` | Constituent lists, per-stock Yahoo price store, Nifty 50 / 500 TRI benchmarks |
 | `requirements.txt` | Pinned dependencies |
 

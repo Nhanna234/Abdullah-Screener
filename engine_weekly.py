@@ -1,31 +1,24 @@
 """
-Weekly Setup B - pullback to the 10-week EMA, with a fixed target and stop-loss.
+Weekly reversal from the 10-week EMA, with a fixed target and stop-loss.
 Pure pandas/numpy. Weekly candles are built from daily prices (weeks end on Friday).
 
 SCAN LIST: only stocks on the monthly list are scanned. A stock joins the list at a month-end
             where it gives a monthly Setup A or B signal (both setups, monthly settings) and leaves
             at a month-end where the monthly exit fires (close < 12M EMA or Close/EMA > exit_ext).
             A week uses the list as of the last month-end before the week started.
-SETUP (known when the touch week w opens - every value below uses weeks up to w-1)
-  W1. Recent high : the highest close of the 52 weeks before w was made in week w-k-1,
-                    1 <= k <= w_kmax (k = pullback weeks before the touch week)
-  W2. Above EMA   : every weekly close from the high week to w-1 is >= the 10W EMA
-  W3. EMA rising  : E[w-1] / E[w-1-w_slope_window] - 1 >= w_min_slope
-  W4. Volume dry-up (switch, off by default): average daily volume of the k pullback weeks
-                    <= w_vol_dry x average daily volume of the 10 weeks ending at the high
-  COMMON: close / 52-week low - 1 >= min_dist_low; history >= min_history months;
-          26-week median daily turnover >= min_turnover_cr
-TOUCH ZONE: the line is E[w-1], the 10W EMA as it stood when week w opened (the week's own
-            EMA is only known at Friday's close). Touch = a daily low <= line x (1 + w_low_hi).
-            If the week's low falls below line x (1 + w_low_lo) the setup is cancelled.
-ENTRY (first that happens; the setup expires after week w+1)
-  1. Prev-week high break : after the touch, the first day whose high > week w-1's high.
-                            Fill at that high, or at the open if the day opens above it.
-                            On the touch day itself only if the day opened at/below that high.
-  2. Strong close         : week w closes >= E[w] with closing range >= b_min_cr ->
-                            buy at the next trading day's open (or week w's close).
-  3. Touch-week high break: week w closes >= E[w] but the closing range is lower ->
-                            in week w+1, buy the first break above week w's high.
+SIGNAL (the reversal candle, week w, decided at its Friday close)
+  W1. 26-week range : highest weekly high / lowest weekly low of the w_range_weeks weeks before w
+                      >= w_range, and the low came before the high (first occurrence of each)
+  W2. EMA rising    : E[w-1] / E[w-1-w_slope_window] - 1 >= w_min_slope
+  W3. Near the EMA  : in week w or the (w_near_weeks - 1) weeks before it, a weekly low within
+                      w_low_lo..w_low_hi of that week's 10W EMA
+  W4. Above the EMA : Close[w] > E[w]
+  W5. Reversal      : Close[w] / Close[w-1] - 1 > w_min_ret and closing range > w_min_cr
+  COMMON: history >= min_history months; 26-week median daily turnover >= min_turnover_cr
+ENTRY
+  closing range > w_cr_close  -> buy at week w's close
+  otherwise                   -> in week w+1, buy the first break above week w's high (fill at the
+                                 high, or at the open if the day opens above it); expires after w+1
 EXIT  (checked daily, from the exact entry price)
   Stop-loss = entry x (1 - w_stop); Target = entry x (1 + w_target).
   Entry day: only the close is compared (the order of the intraday low/high vs the fill is
@@ -33,7 +26,7 @@ EXIT  (checked daily, from the exact entry price)
   at the open; else low <= stop exits at the stop, high >= target at the target (stop first
   if both). A weekly close below the 10W EMA exits at the next open (or that close).
 PORTFOLIO: daily event simulation with `slots` equal slots, exits before entries, same-day
-           entries ranked by close / 52-week low; cash earns cash_yield.
+           entries ranked by close / 26-week low; cash earns cash_yield.
 """
 
 from __future__ import annotations
@@ -42,18 +35,18 @@ from collections import defaultdict
 
 import numpy as np
 import pandas as pd
+from numpy.lib.stride_tricks import sliding_window_view
 
 import engine as E
 
 W_DEFAULTS = dict(
-    w_ema=10, w_slope_window=6, w_min_slope=0.02, w_kmax=4,
-    w_low_lo=-0.05, w_low_hi=0.03, w_target=0.20, w_stop=0.075,
-    w_use_vol_dry=False, w_vol_dry=0.80,
+    w_ema=10, w_slope_window=6, w_min_slope=0.02, w_range_weeks=26, w_range=1.30,
+    w_low_lo=-0.05, w_low_hi=0.03, w_near_weeks=3, w_min_ret=0.04, w_min_cr=0.75,
+    w_cr_close=0.90, w_target=0.20, w_stop=0.075,
 )
 FREQ = "W-FRI"
-W_KMAX_LIMIT = 8                      # pullback lengths computed up to this; UI allows 1..8
-ENTRY_TYPES = {1: "Prev-week high break", 2: "Strong close", 3: "Touch-week high break"}
-STATUS_ORDER = {"TRIGGERED": 0, "BUY NEXT OPEN": 1, "BUY STOP": 2, "WATCH": 3, "Rejected": 4}
+ENTRY_TYPES = {1: "Buy above signal high", 2: "Buy at signal close"}
+STATUS_ORDER = {"TRIGGERED": 0, "BUY STOP": 1, "WATCH": 2, "Rejected": 3}
 EMA_EXIT = "Weekly close < 10W EMA"
 
 
@@ -127,51 +120,53 @@ def to_weekly(daily: dict, last_final_day: pd.Timestamp | None = None) -> dict:
     return w
 
 
+def _low_before_high(H: pd.DataFrame, L: pd.DataFrame, n: int) -> pd.DataFrame:
+    """True where, in the n weeks before each row, the lowest low came before the highest high."""
+    h = H.shift(1).values
+    l_ = L.shift(1).values
+    out = np.zeros(h.shape, bool)
+    if len(h) >= n:
+        hw = sliding_window_view(np.where(np.isnan(h), -np.inf, h), n, axis=0)   # (rows, cols, n)
+        lw = sliding_window_view(np.where(np.isnan(l_), np.inf, l_), n, axis=0)
+        out[n - 1:] = np.argmin(lw, axis=2) < np.argmax(hw, axis=2)
+    return pd.DataFrame(out, H.index, H.columns)
+
+
 def compute_indicators(w: dict, P: dict) -> dict:
-    """Weekly indicators. One empty week is appended so 'armed for next week' can be read."""
+    """Weekly indicators. One empty week is appended so 'ready for next week' can be read."""
     weeks = w["Close"].index
     full = weeks.append(pd.PeriodIndex([weeks[-1] + 1], freq=FREQ))
-    C, H, L, O, AV, T = (w[k].reindex(full) for k in ("Close", "High", "Low", "Open", "AvgVol", "Turnover"))
+    C, H, L, O, T = (w[k].reindex(full) for k in ("Close", "High", "Low", "Open", "Turnover"))
     Ew = C.ewm(span=P["w_ema"], adjust=False).mean().where(C.notna())
-    sw = P["w_slope_window"]
-    low52 = L.shift(1).rolling(52, min_periods=52).min()
-    ind = {"weeks": weeks, "all_weeks": full, "C": C, "H": H, "L": L, "O": O, "E": Ew,
-           "cr": ((C - L) / (H - L)).where(H > L),
-           "slope": Ew.shift(1) / Ew.shift(1 + sw) - 1,                # before the touch week
-           "low52": low52, "score": C.shift(1) / low52,
-           "hist": C.notna().cumsum().shift(1), "turn": T.shift(1),
-           "prev_close": C.shift(1), "prev_ema": Ew.shift(1), "prev_high": H.shift(1)}
-    ind["low_vs_ema"] = L / ind["prev_ema"] - 1
-    ind["close_vs_ema"] = C / Ew - 1
-
-    # ---- structure: where was the 52-week closing high (weeks w-52..w-1)?
-    hi52 = C.shift(1).rolling(52, min_periods=52).max()
-    nan = pd.DataFrame(np.nan, C.index, C.columns)
-    k_fr, pull_fr, ref_fr = nan.copy(), nan.copy(), nan.copy()
-    above = pd.DataFrame(False, C.index, C.columns)
-    k_fr = k_fr.mask(C.shift(1) >= hi52, 0)             # last week IS the high -> no pullback
-    run = C.shift(1) >= Ew.shift(1)
-    for k in range(1, W_KMAX_LIMIT + 1):
-        run = run & (C.shift(k + 1) >= Ew.shift(k + 1))
-        hit = k_fr.isna() & hi52.notna() & (C.shift(k + 1) >= hi52)
-        k_fr = k_fr.mask(hit, k)
-        above = above | (hit & run)
-        pull_fr = pull_fr.mask(hit, AV.shift(1).rolling(k, min_periods=1).mean())
-        ref_fr = ref_fr.mask(hit, AV.shift(k + 1).rolling(10, min_periods=6).mean())
-    ind["k"], ind["above"], ind["vol_ratio"] = k_fr, above, pull_fr / ref_fr
-    return ind
+    sw, rw, nw = P["w_slope_window"], int(P["w_range_weeks"]), int(P["w_near_weeks"])
+    hmax = H.shift(1).rolling(rw, min_periods=rw).max()
+    lmin = L.shift(1).rolling(rw, min_periods=rw).min()
+    lve = L / Ew - 1                                               # each week's low vs its own EMA
+    near = (lve >= P["w_low_lo"]) & (lve <= P["w_low_hi"])
+    near_prev = pd.DataFrame(False, C.index, C.columns)            # weeks w-1 .. w-(nw-1)
+    for k in range(1, nw):
+        near_prev = near_prev | near.shift(k, fill_value=False)
+    return {"weeks": weeks, "all_weeks": full, "C": C, "H": H, "L": L, "O": O, "E": Ew,
+            "cr": ((C - L) / (H - L)).where(H > L), "ret": C / C.shift(1) - 1,
+            "slope": Ew.shift(1) / Ew.shift(1 + sw) - 1,           # before the signal week
+            "hist": C.notna().cumsum().shift(1), "turn": T.shift(1), "prev_close": C.shift(1),
+            "hmax": hmax, "lmin": lmin, "range": hmax / lmin, "low_first": _low_before_high(H, L, rw),
+            "low_vs_ema": lve, "near": near, "near_prev": near_prev, "near_any": near | near_prev,
+            "close_vs_ema": C / Ew - 1, "score": C / lmin, "score_prev": C.shift(1) / lmin}
 
 
-def setup_rules(ind: dict, P: dict) -> dict:
-    """Boolean frames for the pre-week setup rules, cumulative (shared by signals and funnel)."""
+def signal_rules(ind: dict, P: dict) -> dict:
+    """Boolean frames for the signal rules, cumulative (shared by signals, screener and funnel)."""
     r = {"listed": ind["listed"]}
     r["eligible"] = r["listed"] & (ind["hist"] >= history_weeks(P)) & (ind["turn"] >= P["min_turnover_cr"] * 1e7) \
-        & ind["prev_close"].notna() & ind["prev_ema"].notna()
-    k = ind["k"]
-    r["struct"] = r["eligible"] & (k >= 1) & (k <= P["w_kmax"]) & ind["above"]
-    r["rising"] = r["struct"] & (ind["slope"] >= P["w_min_slope"])
-    r["dist"] = r["rising"] & (ind["score"] - 1 >= P["min_dist_low"])
-    r["armed"] = r["dist"] & (ind["vol_ratio"] <= P["w_vol_dry"]) if P["w_use_vol_dry"] else r["dist"]
+        & ind["prev_close"].notna()
+    r["range"] = r["eligible"] & (ind["range"] >= P["w_range"]) & ind["low_first"]
+    r["rising"] = r["range"] & (ind["slope"] >= P["w_min_slope"])
+    r["near"] = r["rising"] & ind["near_any"]
+    r["above"] = r["near"] & (ind["C"] > ind["E"])
+    r["ret"] = r["above"] & (ind["ret"] > P["w_min_ret"])
+    r["signal"] = r["ret"] & (ind["cr"] > P["w_min_cr"])
+    r["watch"] = r["rising"] & ind["near_prev"]                    # read on next week's row
     return r
 
 
@@ -217,84 +212,36 @@ def _fill(open_px, stop):
 
 
 def find_entries(ind: dict, P: dict, dp: dict):
-    """Every entry the rules produce (independent of any portfolio), plus each setup's outcome."""
-    r = setup_rules(ind, P)
-    armed = r["armed"].values
-    Cw, Hw, Ew, CRw = (ind[k].values for k in ("C", "H", "E", "cr"))
-    prevE, prevH = ind["prev_ema"].values, ind["prev_high"].values
-    O, H, L = dp["O"], dp["H"], dp["L"]
+    """Every entry the rules produce (independent of any portfolio), plus each signal's outcome."""
+    r = signal_rules(ind, P)
+    Cw, Hw, CRw = (ind[k].values for k in ("C", "H", "cr"))
+    O, H = dp["O"], dp["H"]
     first, last, lastv = dp["first"], dp["last"], dp["lastv"]
-    lo, hi, thr = P["w_low_lo"], P["w_low_hi"], P["b_min_cr"]
-    close_exec = P["execution"] == "close"
     n_days, n_real = len(dp["days"]), len(ind["weeks"])
     cands, setups = [], {}
-    for wi, j in zip(*np.nonzero(armed[:n_real])):
-        eref, ph = prevE[wi, j], prevH[wi, j]
-        if not eref > 0 or np.isnan(ph):
-            continue
-        zl, zh = eref * (1 + lo), eref * (1 + hi)
-        touched, broken, entry, wtd = None, False, None, np.inf
-        for d in range(first[wi], last[wi] + 1):
-            low = L[d, j]
-            if np.isnan(low):
-                continue
-            wtd = min(wtd, low)
-            if wtd < zl:
-                broken = True
-                break
-            if touched is None:
-                if low <= zh:
-                    touched = d
-                    if O[d, j] <= ph < H[d, j]:
-                        entry = (d, ph, 1, False, False)
-            elif H[d, j] > ph:
-                entry = (d, _fill(O[d, j], ph), 1, O[d, j] >= ph, False)
-            if entry:
-                break
-        base = {"j": j, "week": wi, "k": ind["k"].iat[wi, j], "slope": ind["slope"].iat[wi, j],
-                "score": ind["score"].iat[wi, j], "ema": eref, "prev_high": ph,
-                "low_vs_ema": (wtd if np.isfinite(wtd) else np.nan) / eref - 1}
-        out = {**base, "touched": touched is not None and not broken, "entry": None}
-        week_done = wi < n_real - 1 or not ind.get("partial", False)
-        if entry:
-            out["status"] = "TRIGGERED"
-        elif broken:
-            out["status"] = f"low fell more than {abs(lo):.0%} below the 10W EMA"
-        elif touched is None:
-            out["status"] = "no touch"
-        elif np.isnan(Cw[wi, j]):
-            out["status"] = "no close"
-        elif Cw[wi, j] < Ew[wi, j]:
-            out["status"] = "closed below the 10W EMA"
-        elif CRw[wi, j] >= thr:
-            out["status"] = "BUY NEXT OPEN"
-            if close_exec and week_done:
+    for wi, j in zip(*np.nonzero(r["signal"].values[:n_real])):
+        base = {"j": j, "week": wi, "slope": ind["slope"].iat[wi, j], "score": ind["score"].iat[wi, j],
+                "range": ind["range"].iat[wi, j], "ret": ind["ret"].iat[wi, j], "cr": CRw[wi, j],
+                "low_vs_ema": ind["low_vs_ema"].iat[wi, j], "close": Cw[wi, j], "week_high": Hw[wi, j]}
+        entry = None
+        if CRw[wi, j] > P["w_cr_close"]:
+            status = "TRIGGERED"
+            if lastv[wi, j] >= 0:
                 entry = (lastv[wi, j], Cw[wi, j], 2, False, True)
-                out["status"] = "TRIGGERED"
-            elif wi + 1 < n_real:
-                d = _first_open(dp, j, first[wi + 1], last[wi + 1])
-                if d is not None:
-                    entry = (d, O[d, j], 2, True, False)
         else:
-            out["status"] = "BUY STOP"
-            stop = Hw[wi, j]
+            status, stop = "BUY STOP", Hw[wi, j]
             if wi + 1 < n_real:
                 for d in range(first[wi + 1], last[wi + 1] + 1):
                     if H[d, j] > stop:
-                        entry = (d, _fill(O[d, j], stop), 3, O[d, j] >= stop, False)
+                        entry = (d, _fill(O[d, j], stop), 1, O[d, j] >= stop, False)
                         break
-        out["close"], out["cr"] = Cw[wi, j], CRw[wi, j]
-        out["week_high"], out["week_ema"] = Hw[wi, j], Ew[wi, j]
-        if entry:
+        out = {**base, "status": status, "entry": None}
+        if entry and entry[0] < n_days and not np.isnan(entry[1]):
             d, px, typ, at_open, at_close = entry
-            if d >= n_days or np.isnan(px):
-                entry = None
-            else:
-                c = {**base, "day": int(d), "price": float(px), "type": typ,
-                     "at_open": bool(at_open), "at_close": bool(at_close),
-                     "touch_cr": CRw[wi, j]}
-                cands.append(c)
-                out["entry"] = c
+            c = {**base, "day": int(d), "price": float(px), "type": typ,
+                 "at_open": bool(at_open), "at_close": bool(at_close)}
+            cands.append(c)
+            out["entry"] = c
         setups[(wi, j)] = out
     cands.sort(key=lambda c: (c["day"], c["j"], c["week"]))
     unique, seen = [], set()
@@ -380,12 +327,12 @@ def _info(c, dp, ind, P, names, inds):
     s = dp["syms"][c["j"]]
     return {"Symbol": s, "Company": names.get(s, ""), "Industry": inds.get(s, ""),
             "Monthly signal": monthly_label(ind, c["week"], c["j"]),
-            "Touch week": week_label(ind["all_weeks"][c["week"]]),
+            "Signal week": week_label(ind["all_weeks"][c["week"]]),
             "Entry type": ENTRY_TYPES[c["type"]], "Entry date": str(dp["days"][c["day"]].date()),
             "Entry price": c["price"], "Stop-loss": c["price"] * (1 - P["w_stop"]),
-            "Target": c["price"] * (1 + P["w_target"]), "Pullback weeks": c["k"],
-            "Touch low vs EMA": c["low_vs_ema"], "EMA slope": c["slope"],
-            "Above 52W low": c["score"] - 1, "Touch CR": c["touch_cr"]}
+            "Target": c["price"] * (1 + P["w_target"]), "Week return": c["ret"],
+            "Closing range": c["cr"], "26W high/low": c["range"], "Signal low vs EMA": c["low_vs_ema"],
+            "EMA slope": c["slope"]}
 
 
 def _weeks_held(dp, e, x):
@@ -486,24 +433,19 @@ def all_signal_trades(W: dict, P: dict, start_idx: int, end_idx: int, names=None
 
 
 def funnel(W: dict) -> pd.DataFrame:
-    """Weekly counts for each cumulative setup rule and the entries by type."""
+    """Weekly counts for each cumulative signal rule and the entries by type."""
     r, ind, dp = W["rules"], W["ind"], W["dp"]
     weeks = ind["weeks"]
     n = len(weeks)
-    touched = np.zeros(n, int)
-    for (wi, _), s in W["setups"].items():
-        touched[wi] += bool(s["touched"])
     by_type = {t: np.zeros(n, int) for t in ENTRY_TYPES}
     for c in W["cands"]:
         by_type[c["type"]][dp["day_w"][c["day"]]] += 1
+    count = lambda key: r[key].sum(axis=1).values[:n]
     f = pd.DataFrame({
-        "On monthly list": r["listed"].sum(axis=1).values[:n],
-        "Eligible": r["eligible"].sum(axis=1).values[:n],
-        "52W high 2+ weeks back, closes above EMA": r["struct"].sum(axis=1).values[:n],
-        "+ EMA rising": r["rising"].sum(axis=1).values[:n],
-        "+ above 52W low": r["dist"].sum(axis=1).values[:n],
-        "Setups (all pre-week rules)": r["armed"].sum(axis=1).values[:n],
-        "Touched EMA zone": touched,
+        "On monthly list": count("listed"), "Eligible": count("eligible"),
+        "26W high/low (low first)": count("range"), "+ EMA rising": count("rising"),
+        "+ near 10W EMA": count("near"), "+ close above EMA": count("above"),
+        "+ week return": count("ret"), "Reversal signals": count("signal"),
         **{ENTRY_TYPES[t]: v for t, v in by_type.items()},
     }, index=weeks)
     f["Entries"] = sum(f[ENTRY_TYPES[t]] for t in ENTRY_TYPES)
@@ -538,98 +480,90 @@ def run_backtest(W: dict, P: dict, start_idx: int, end_idx: int, names=None, ind
 
 # ═══════════════════════════════════════════════════════════ screener
 def screen_week(W: dict, P: dict, wi: int, names: dict, inds: dict) -> pd.DataFrame:
-    """Entries in week wi, setups ready for next week, the watch list and near-misses."""
+    """Entries in week wi, buy-stops for next week, the watch list and near-misses."""
     ind, dp = W["ind"], W["dp"]
     syms = dp["syms"]
     r = W["rules"]
     rows, done = [], set()
     stop_pct, tgt_pct = P["w_stop"], P["w_target"]
 
-    def common(j, wk):
-        sc = ind["score"].iat[wk, j]
+    def common(j, wk, score):
         turn = ind["turn"].iat[wk, j]
         return {"Symbol": syms[j], "Company": names.get(syms[j], ""), "Industry": inds.get(syms[j], ""),
-                "Monthly signal": monthly_label(ind, wk, j), "Close": ind["C"].iat[wi, j], "10W EMA": ind["E"].iat[wi, j],
-                "Close vs EMA": ind["close_vs_ema"].iat[wi, j],
-                "Pullback weeks": ind["k"].iat[wk, j], "EMA slope": ind["slope"].iat[wk, j],
-                "Above 52W low": sc - 1, "Turnover (Rs cr)": turn / 1e7 if pd.notna(turn) else np.nan,
-                "_score": sc}
+                "Monthly signal": monthly_label(ind, wk, j), "Close": ind["C"].iat[wi, j],
+                "10W EMA": ind["E"].iat[wi, j], "Close vs EMA": ind["close_vs_ema"].iat[wi, j],
+                "Low vs EMA": ind["low_vs_ema"].iat[wi, j], "Week return": ind["ret"].iat[wi, j],
+                "Closing range": ind["cr"].iat[wi, j], "26W high/low": ind["range"].iat[wk, j],
+                "EMA slope": ind["slope"].iat[wk, j],
+                "Turnover (Rs cr)": turn / 1e7 if pd.notna(turn) else np.nan, "_score": score}
 
     def levels(trigger):
         return {"Trigger": trigger, "Stop-loss": trigger * (1 - stop_pct), "Target": trigger * (1 + tgt_pct)}
 
+    blank = {"Trigger": np.nan, "Stop-loss": np.nan, "Target": np.nan, "Entry date": None}
     # 1. entries during week wi
     for c in W["cands"]:
         j = c["j"]
         if dp["day_w"][c["day"]] != wi or j in done:     # one row per stock (already bought)
             continue
         done.add(j)
-        rows.append({**common(j, c["week"]), "Status": "TRIGGERED", "Action": ENTRY_TYPES[c["type"]],
+        rows.append({**common(j, wi, c["score"]), "Week return": c["ret"], "Closing range": c["cr"],
+                     "Status": "TRIGGERED", "Action": ENTRY_TYPES[c["type"]],
                      **levels(c["price"]), "Entry date": str(dp["days"][c["day"]].date()),
-                     "Low vs EMA": c["low_vs_ema"], "Closing range": ind["cr"].iat[c["week"], j],
-                     "Reason": f"touch week {week_label(ind['all_weeks'][c['week']])}"})
-    # 2. setups of week wi still waiting for an entry, as seen at its close
+                     "Reason": f"signal week {week_label(ind['all_weeks'][c['week']])}"})
+    # 2. reversal candles this week with a closing range up to w_cr_close: buy above the high next week
     for (sw, j), s in W["setups"].items():
-        if sw != wi or j in done or s["status"] not in ("BUY NEXT OPEN", "BUY STOP"):
+        if sw != wi or j in done or s["status"] != "BUY STOP":
             continue
         done.add(j)
-        nxt = s["status"] == "BUY NEXT OPEN"
-        rows.append({**common(j, wi), "Status": s["status"],
-                     "Action": "Strong close: buy at next open" if nxt else "Buy above this week's high",
-                     **levels(s["close"] if nxt else s["week_high"]), "Entry date": None,
-                     "Low vs EMA": s["low_vs_ema"], "Closing range": s["cr"],
-                     "Reason": "touched the 10W EMA and closed above it"})
-    # 3. watch list: every setup rule passes for next week; it still needs a touch
-    nxt_w = wi + 1
-    for j in np.nonzero(r["armed"].values[nxt_w])[0]:
+        rows.append({**common(j, wi, s["score"]), "Status": "BUY STOP",
+                     "Action": f"Buy above this week's high {s['week_high']:,.2f} next week",
+                     **levels(s["week_high"]), "Entry date": None,
+                     "Reason": f"reversal candle: return {s['ret']:.1%}, closing range {s['cr']:.2f}"})
+    # 3. watch list: near the EMA and every trend rule passes for next week; needs a reversal candle
+    nxt = wi + 1
+    for j in np.nonzero(r["watch"].values[nxt])[0]:
         if j in done:
             continue
         done.add(j)
-        e = ind["E"].iat[wi, j]
-        rows.append({**common(j, nxt_w), "Status": "WATCH",
-                     "Action": f"Wait for a low at/below {e * (1 + P['w_low_hi']):,.2f}, "
-                               f"then buy above {ind['H'].iat[wi, j]:,.2f}",
-                     **levels(ind["H"].iat[wi, j]), "Entry date": None,
-                     "Low vs EMA": ind["L"].iat[wi, j] / e - 1, "Closing range": ind["cr"].iat[wi, j],
-                     "Reason": f"zone {e * (1 + P['w_low_lo']):,.2f} - {e * (1 + P['w_low_hi']):,.2f}"})
-    # 4. near-misses: came into the week above the EMA, touched the zone, failed a rule
-    lve = ind["low_vs_ema"].values[wi]
-    prev_ok = (ind["prev_close"].values[wi] >= ind["prev_ema"].values[wi])
-    near = ind["listed"].values[wi] & prev_ok & (lve <= P["w_low_hi"]) & ind["k"].notna().values[wi]
+        rows.append({**common(j, nxt, ind["score_prev"].iat[nxt, j]), "Status": "WATCH",
+                     "Action": f"Needs a reversal week: close above the 10W EMA, return > {P['w_min_ret']:.0%}, "
+                               f"closing range > {P['w_min_cr']:.2f}", **blank,
+                     "Reason": "low near the 10W EMA in the last 2 weeks" if P["w_near_weeks"] == 3
+                               else "low near the 10W EMA recently"})
+    # 4. near-misses: on the list and near the EMA this week, but no signal
+    near = ind["listed"].values[wi] & ind["near_any"].values[wi]
     for j in np.nonzero(near)[0]:
         if j in done:
             continue
         why = []
         hist, turn = ind["hist"].iat[wi, j], ind["turn"].iat[wi, j]
-        k = ind["k"].iat[wi, j]
         if not hist >= history_weeks(P):
             why.append(f"history {0 if pd.isna(hist) else int(hist)}w < {history_weeks(P)}w")
         if not turn >= P["min_turnover_cr"] * 1e7:
             why.append(f"turnover Rs {0 if pd.isna(turn) else turn / 1e7:.1f} cr < {P['min_turnover_cr']:g} cr")
-        if not 1 <= k <= P["w_kmax"]:
-            why.append("52W high was last week" if k == 0 else f"52W high {int(k) + 1} weeks back (max {P['w_kmax'] + 1})")
-        elif not ind["above"].iat[wi, j]:
-            why.append("a pullback week closed below the EMA")
+        rng = ind["range"].iat[wi, j]
+        if not rng >= P["w_range"]:
+            why.append(f"26W high/low {0 if pd.isna(rng) else rng:.2f} < {P['w_range']:.2f}")
+        elif not ind["low_first"].iat[wi, j]:
+            why.append("26W low came after the high")
         sl = ind["slope"].iat[wi, j]
         if not sl >= P["w_min_slope"]:
             why.append(f"EMA slope {0 if pd.isna(sl) else sl:+.1%} < {P['w_min_slope']:+.0%}")
-        sc = ind["score"].iat[wi, j]
-        if not sc - 1 >= P["min_dist_low"]:
-            why.append(f"only {0 if pd.isna(sc) else sc - 1:.0%} above 52W low")
-        vr = ind["vol_ratio"].iat[wi, j]
-        if P["w_use_vol_dry"] and not vr <= P["w_vol_dry"]:
-            why.append(f"pullback volume {0 if pd.isna(vr) else vr:.2f}x > {P['w_vol_dry']:.2f}x")
-        s = W["setups"].get((wi, j))
-        if s and s["status"] not in ("TRIGGERED", "BUY NEXT OPEN", "BUY STOP"):
-            why.append(s["status"])
+        if not ind["C"].iat[wi, j] > ind["E"].iat[wi, j]:
+            why.append("closed below the 10W EMA")
+        ret, cr = ind["ret"].iat[wi, j], ind["cr"].iat[wi, j]
+        if not ret > P["w_min_ret"]:
+            why.append(f"week return {0 if pd.isna(ret) else ret:.1%} <= {P['w_min_ret']:.0%}")
+        if not cr > P["w_min_cr"]:
+            why.append(f"closing range {0 if pd.isna(cr) else cr:.2f} <= {P['w_min_cr']:.2f}")
         if not why:
             why.append("no entry")
-        rows.append({**common(j, wi), "Status": "Rejected", "Action": None,
-                     "Trigger": np.nan, "Stop-loss": np.nan, "Target": np.nan, "Entry date": None,
-                     "Low vs EMA": lve[j], "Closing range": ind["cr"].iat[wi, j], "Reason": "; ".join(why)})
+        rows.append({**common(j, wi, ind["score"].iat[wi, j]), "Status": "Rejected", "Action": None, **blank,
+                     "Reason": "; ".join(why)})
     cols = ["Symbol", "Company", "Industry", "Monthly signal", "Status", "Action", "Trigger", "Stop-loss", "Target",
-            "Entry date", "Close", "10W EMA", "Close vs EMA", "Low vs EMA", "Closing range",
-            "Pullback weeks", "EMA slope", "Above 52W low", "Turnover (Rs cr)", "Reason"]
+            "Entry date", "Close", "10W EMA", "Close vs EMA", "Low vs EMA", "Week return", "Closing range",
+            "26W high/low", "EMA slope", "Turnover (Rs cr)", "Reason"]
     df = pd.DataFrame(rows)
     if df.empty:
         return pd.DataFrame(columns=["Rank"] + cols)

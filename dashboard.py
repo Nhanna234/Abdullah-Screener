@@ -159,7 +159,7 @@ def chart(body):
 
 
 def weekly_chart_marker(week):
-    """Chart metadata that marks a touch week on the weekly candles."""
+    """Chart metadata that marks the signal week on the weekly candles."""
     return {"timeframe": "weekly", "month": WK.week_label(week), "week": str(week.start_time.date())}
 
 
